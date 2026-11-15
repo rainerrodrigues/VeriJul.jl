@@ -226,6 +226,82 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         @test all(diff(times) .== 14)                # rising edges one period apart
     end
 
+    # Run `f` in a task and fail (instead of hanging the suite) if it takes too long
+    function within(f, seconds)
+        t = @async f()
+        timedwait(() -> istaskdone(t), seconds) === :ok || error("timed out after $seconds s")
+        return fetch(t)
+    end
+
+    @testset "Lockstep: busy testbenches never miss edges (mock design)" begin
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        start_clock!(sim)
+        sleep(0.05)
+        @test !sim.started && sim.time == 0          # nobody waiting: time stands still
+
+        reset!(sim)
+        dut.step = 1
+        times, counts = Int[], Int[]
+        within(10) do
+            for i in 1:8
+                @tick sim
+                push!(times, sim.time); push!(counts, dut.count)
+                isodd(i) ? sleep(0.003) : flush(stdout)   # I/O between ticks
+            end
+        end
+        @test all(==(10), diff(times))
+        @test counts == 1:8
+        stop_clock!(sim)
+    end
+
+    @testset "Lockstep: @testbench driver and monitor see every edge (mock design)" begin
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        @testbench function driver(sim)
+            reset!(sim; cycles=1)
+            sim.dut.step = 2
+            for _ in 1:5
+                sleep(0.003)                         # busy: the clock must wait
+                @tick sim
+            end
+        end
+        @testbench function monitor(sim)
+            seen = Tuple{Int,Int}[]
+            for _ in 1:12                            # keeps going after the driver ends
+                @tick sim
+                push!(seen, (sim.time, Int(sim.dut.count)))
+                sleep(0.001)
+            end
+            return seen
+        end
+        start_clock!(sim)
+        d = launch_driver(sim)
+        m = launch_monitor(sim)
+        seen = within(20) do
+            wait(d)
+            fetch(m)
+        end
+        @test all(==(10), diff(first.(seen)))       # no edge skipped
+        @test istaskdone(d) && isempty(sim.participants)
+        stop_clock!(sim)
+    end
+
+    @testset "Lockstep: waiting on sim.rising_edge directly still works (mock design)" begin
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        start_clock!(sim)
+        t0 = within(5) do
+            wait(sim.rising_edge)
+            sim.time
+        end
+        within(5) do
+            wait(sim.rising_edge)
+        end
+        @test sim.time == t0 + 10
+        stop_clock!(sim)
+    end
+
     @testset "@testbench with a DUT (mock design)" begin
         dut = MockDesign.make_dut()
         sim = Simulator(dut)

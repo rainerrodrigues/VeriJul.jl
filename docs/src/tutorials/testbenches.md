@@ -56,7 +56,13 @@ end
 
 [`@testbench`](@ref) defines a function and a `launch_<name>(sim)` that runs
 it as a task. That's useful when several things should happen in parallel,
-for example a driver and a monitor:
+for example a driver and a monitor.
+
+The clock waits for every launched testbench: no edge happens while any of
+them is busy between two ticks, so both see every edge even if one of them
+prints or sleeps. A testbench that has finished no longer holds the clock
+back. Tasks started with plain `@async` aren't waited for, so launch
+concurrent testbenches with `@testbench`.
 
 ```@example tb
 @testbench function driver(sim)

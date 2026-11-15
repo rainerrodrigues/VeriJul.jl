@@ -15,6 +15,10 @@ First release.
   nothing is written to the working directory; a `build_dir` you pass is
   only emptied if VeriJul created it. `clear_build_cache()` removes cached
   builds.
+- Lockstep simulation: simulated time only advances while the testbench is
+  waiting in `tick`, so printing, sleeping or other I/O between ticks never
+  skips an edge. The clock also waits for every task launched with
+  `@testbench`.
 - `Simulator` with multiple clocks on one timeline (`add_clock!`),
   `tick`/`@tick sim n` with `clock`, `edge` and `timeout` options, and
   `reset!`. Waiting testbenches get `ClockStopped` or `TickTimeout` errors
