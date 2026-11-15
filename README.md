@@ -55,6 +55,10 @@ Also included:
 
 - multi-file designs, include directories, `` `define``s and parameter overrides
 - several clocks with their own periods (`add_clock!`), `@tick sim n clock=:clk_b`
+- `@wait_until sim dut.done == 1 max_cycles=100` and `wait_edge(sim, :busy)`
+  for designs whose latency varies
+- `@test` inside concurrent `@testbench` tasks, recorded in your `@testset`,
+  with failures that report the simulation time and cycle
 - `reset!`, and timeouts so stuck testbenches fail instead of hanging
 - ports of any width, with wide ports as `BigInt`
 

@@ -61,9 +61,13 @@ Pkg.add("VeriJul")
    small filter.
 2. [Self-checking testbenches](@ref) shows how to compare a design against
    a Julia reference model with `Test`.
-3. [Build options and multiple clocks](@ref) covers multi-file designs,
+3. [Waiting for events](@ref) waits for conditions and signal edges in
+   designs whose latency varies, with cycle limits.
+4. [Testing with Test.jl](@ref) runs `@test` inside concurrent testbenches,
+   with failures that report the simulation time.
+5. [Build options and multiple clocks](@ref) covers multi-file designs,
    parameters, defines and clock domains.
-4. [Ports and wide signals](@ref) explains port types, truncation and ports
+6. [Ports and wide signals](@ref) explains port types, truncation and ports
    wider than 64 bits.
 
 To keep building and loading as separate steps, see [Lower-level API](@ref).

@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.2.0
+
+- `@wait_until sim cond` and `wait_until(cond, sim)` wait until a condition
+  holds, checking after every rising edge (or the `edge` of another
+  `clock`), and return the number of edges waited.
+- `wait_edge(sim, :port; edge=:rising)` waits for a rising or falling edge
+  of a 1-bit port, or `edge=:change` for any change of a port of any width,
+  and returns the new value.
+- `max_cycles` on these throws a `WaitTimeout` that names what was awaited
+  and the simulation time; `timeout` gives a wall-clock limit.
+- `sim.cycle` counts rising edges of the main clock.
+- `@test` inside `@testbench` tasks records into the `@testset` they were
+  launched from, and failures carry a `Context:` line with the simulation
+  time, cycle and testbench name.
+- A testbench that throws now fails with a `TestbenchError` (inside the
+  usual `TaskFailedException`) that says which testbench failed and when;
+  the original exception is in its `error` field. **Breaking:** code that
+  inspected `err.task.exception` directly must look at
+  `err.task.exception.error`.
+- `launch_<name>(sim, args...; kwargs...)` passes extra arguments on to the
+  testbench function.
+- New `examples/gcd.v` and two tutorials: "Waiting for events" and
+  "Testing with Test.jl".
+- `Test` is now a dependency (it is a standard library).
+
 ## v0.1.0
 
 First release.

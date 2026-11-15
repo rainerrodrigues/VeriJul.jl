@@ -13,6 +13,8 @@ makedocs(
         "Tutorials" => [
             "tutorials/getting_started.md",
             "tutorials/testbenches.md",
+            "tutorials/waiting.md",
+            "tutorials/testing.md",
             "tutorials/build_and_clocks.md",
             "tutorials/ports.md",
         ],

@@ -88,7 +88,11 @@ fetch(m)
 ```
 
 `fetch` returns the monitor's result once it finishes. If a task throws, the
-error is rethrown by `wait`/`fetch`, so failures are never silently lost.
+error is rethrown by `wait`/`fetch`, wrapped in a [`TestbenchError`](@ref)
+that says when it happened, so failures are never silently lost. Extra
+arguments to a launcher are passed on: `launch_driver(sim, data)` runs
+`driver(sim, data)`. [Testing with Test.jl](@ref) shows how `@test` works
+inside testbenches.
 
 ## Don't hang: timeouts and stopped clocks
 
@@ -97,6 +101,9 @@ things prevent that:
 
 - `timeout` (wall-clock seconds) on [`tick`](@ref) or `@tick` throws a
   [`TickTimeout`](@ref).
+- `max_cycles` on [`@wait_until`](@ref) and [`wait_edge`](@ref) throws a
+  [`WaitTimeout`](@ref) when the design doesn't respond in time (see
+  [Waiting for events](@ref)).
 - [`stop_clock!`](@ref) wakes every waiting task with a
   [`ClockStopped`](@ref) error, and `tick` throws `ClockStopped` if the clock
   isn't running.
@@ -135,4 +142,4 @@ reset!(sim, :rst_n; active_high=false, cycles=4)
 
 The clock must be running. The next tutorial uses it.
 
-Next: [Build options and multiple clocks](@ref).
+Next: [Waiting for events](@ref).

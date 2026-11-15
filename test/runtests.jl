@@ -8,6 +8,15 @@ using VeriJul.Interop: words_to_int, int_to_words
 
 include("mock.jl")
 
+# A testset that keeps every result and never fails its parent
+mutable struct Capture <: Test.AbstractTestSet
+    description::String
+    results::Vector{Any}
+    Capture(desc; kwargs...) = new(desc, Any[])
+end
+Test.record(ts::Capture, r) = (push!(ts.results, r); r)
+Test.finish(ts::Capture) = ts
+
 have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
 
 @testset "VeriJul.jl" begin
@@ -333,8 +342,165 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
             @tick sim 5
             return sim.dut.count
         end
+        @testbench function count_by(sim, step, n; reset=true)
+            reset && reset!(sim; cycles=1)
+            sim.dut.step = step
+            @tick sim n
+            return sim.dut.count
+        end
         start_clock!(sim)
         @test fetch(launch_count_to(sim)) == 5
+        @test fetch(launch_count_by(sim, 3, 4)) == 12                 # extra arguments
+        @test fetch(launch_count_by(sim, 1, 2; reset=false)) == 14    # and keywords
+        stop_clock!(sim)
+    end
+
+    @testset "wait_until and @wait_until (mock design)" begin
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        add_clock!(sim, :clk_slow; half_period=15)
+        start_clock!(sim)
+        within(10) do
+            reset!(sim; cycles=1)
+            c0 = sim.cycle
+            @tick sim 3
+            @test sim.cycle == c0 + 3                        # cycle counts main-clock rising edges
+
+            dut.step = 1
+            start = dut.count
+            @test (@wait_until sim dut.count == start + 5 max_cycles=20) == 5
+            @test (@wait_until sim dut.count >= 1) == 0      # already true: no edge waited
+
+            # Function form with a do-block, on another clock
+            s0 = dut.slow_count
+            n = wait_until(sim; clock=:clk_slow) do
+                dut.slow_count >= s0 + 2
+            end
+            @test n == 2 && dut.slow_count == s0 + 2
+
+            # Running out of cycles names the condition and the time
+            dut.step = 0
+            c1 = sim.cycle
+            err = try
+                @wait_until sim dut.count == 0xff max_cycles=3
+                nothing
+            catch e
+                e
+            end
+            @test err isa WaitTimeout
+            @test err.cycles == 3 && err.cycle == c1 + 3 && err.time == sim.time
+            msg = sprint(showerror, err)
+            @test occursin("`dut.count == 0xff`", msg) && occursin("within 3 cycles", msg)
+
+            # Wall-clock timeout
+            @test_throws TickTimeout wait_until(() -> false, sim; timeout=0.2)
+            @tick sim                                        # still usable afterwards
+        end
+        @test_throws ArgumentError wait_until(() -> true, sim; edge=:both)
+        @test_throws ArgumentError wait_until(() -> true, sim; max_cycles=-1)
+        stop_clock!(sim)
+        @test_throws ClockStopped wait_until(() -> false, sim)
+        @test wait_until(() -> true, sim) == 0               # no need for the clock
+    end
+
+    @testset "wait_edge (mock design)" begin
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        @testbench function pulse_reset(sim)
+            @tick sim 3
+            sim.dut.rst = 1
+            @tick sim 2
+            sim.dut.rst = 0
+        end
+        @testbench function watch_reset(sim)
+            c0 = sim.cycle
+            rose = wait_edge(sim, :rst)
+            c_rise = sim.cycle
+            fell = wait_edge(sim, :rst; edge=:falling)
+            return rose, fell, c_rise - c0, sim.cycle - c_rise
+        end
+        start_clock!(sim)
+        within(10) do
+            @test wait_edge(sim, :clk) == 0x01 && sim.clk_val == 0x01
+
+            dut.step = 2
+            old = dut.count
+            @test wait_edge(sim, :count; edge=:change) == old + 2
+
+            p = launch_pulse_reset(sim)
+            rose, fell, to_rise, to_fall = fetch(launch_watch_reset(sim))
+            wait(p)
+            @test (rose, fell) == (0x01, 0x00)
+            @test to_rise <= 4 && 1 <= to_fall <= 3
+
+            dut.step = 0
+            c0 = sim.cycle
+            err = try wait_edge(sim, :count; edge=:change, max_cycles=4); nothing catch e; e end
+            @test err isa WaitTimeout && err.cycle == c0 + 4
+            @test occursin("a change of `count`", sprint(showerror, err))
+        end
+        @test_throws ArgumentError wait_edge(sim, :count)                 # 8 bits: needs :change
+        @test_throws ArgumentError wait_edge(sim, :wide_out; edge=:falling)
+        @test_throws ArgumentError wait_edge(sim, :rst; edge=:both)
+        @test_throws ErrorException wait_edge(sim, :nope)
+        stop_clock!(sim)
+    end
+
+    @testset "@test inside a testbench reports simulation time (mock design)" begin
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        @testbench function checker(sim)
+            @tick sim 2
+            @test sim.cycle >= 2
+            @test sim.cycle == 1000                  # fails
+            @test error("boom")                      # errors
+        end
+        start_clock!(sim)
+        ts = redirect_stdout(devnull) do             # hide the expected error printout
+            @testset Capture "captured" begin
+                t = launch_checker(sim)              # launched inside the testset
+                within(10) do
+                    wait(t)
+                end
+            end
+        end
+        kinds = map(typeof, ts.results)
+        @test kinds == [Test.Pass, Test.Fail, Test.Error]
+        fail = ts.results[2]
+        @test occursin("cycle 2, testbench `checker`", fail.context)
+        @test occursin("simulation time 10", fail.context)   # first rising edge is at 0
+        stop_clock!(sim)
+    end
+
+    @testset "A throwing testbench fails with TestbenchError (mock design)" begin
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        @testbench function crashes(sim)
+            @tick sim 2
+            error("boom")
+        end
+        @testbench function waits_for_crash(sim)
+            @tick sim
+            wait(launch_crashes(sim))
+        end
+        start_clock!(sim)
+        err = within(10) do
+            try wait(launch_crashes(sim)); nothing catch e; e end
+        end
+        @test err isa TaskFailedException
+        tb = err.task.exception
+        @test tb isa TestbenchError && tb.testbench == :crashes && tb.cycle == 2
+        @test tb.error isa ErrorException && tb.error.msg == "boom"
+        msg = sprint(showerror, tb)
+        @test occursin("testbench `crashes` failed at simulation time 10 (cycle 2)", msg)
+        @test occursin("boom", msg)
+
+        # A parent passes its child's error on instead of wrapping it again
+        err = within(10) do
+            try wait(launch_waits_for_crash(sim)); nothing catch e; e end
+        end
+        @test err.task.exception isa TestbenchError && err.task.exception.testbench == :crashes
+        @test isempty(sim.participants)
         stop_clock!(sim)
     end
 

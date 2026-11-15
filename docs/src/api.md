@@ -25,8 +25,18 @@ stop_clock!
 tick
 @tick
 reset!
+```
+
+## Waiting and testing
+
+```@docs
+wait_until
+@wait_until
+wait_edge
 @testbench
 VeriJul.SimCore.launch
+WaitTimeout
+TestbenchError
 ClockStopped
 TickTimeout
 ```

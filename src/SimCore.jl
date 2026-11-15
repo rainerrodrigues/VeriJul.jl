@@ -6,7 +6,7 @@ using ..Interop: VerilatedModel
 using ..Device: Device, DUT
 
 export Simulator, start_clock!, stop_clock!, add_clock!, tick, reset!,
-       ClockStopped, TickTimeout
+       wait_until, wait_edge, ClockStopped, TickTimeout, WaitTimeout, TestbenchError
 
 """
     ClockStopped()
@@ -30,7 +30,28 @@ struct TickTimeout <: Exception
     seconds::Float64
 end
 Base.showerror(io::IO, e::TickTimeout) =
-    print(io, "TickTimeout: no clock edge arrived within $(e.seconds) s")
+    print(io, "TickTimeout: the wait did not finish within $(e.seconds) s of wall-clock time")
+
+"""
+    WaitTimeout
+
+Thrown by [`wait_until`](@ref VeriJul.SimCore.wait_until),
+[`@wait_until`](@ref VeriJul.DSL.@wait_until) and
+[`wait_edge`](@ref VeriJul.SimCore.wait_edge) when what they wait for doesn't
+happen within `max_cycles` clock cycles. Fields: `what` (a description),
+`cycles` (the limit), `time` and `cycle` (the simulation time and cycle
+count when it gave up).
+"""
+struct WaitTimeout <: Exception
+    what::String
+    cycles::Int
+    time::Int64
+    cycle::Int64
+end
+Base.showerror(io::IO, e::WaitTimeout) =
+    print(io, "WaitTimeout: ", e.what, " did not happen within ", e.cycles,
+          e.cycles == 1 ? " cycle" : " cycles", " (gave up at time ", e.time,
+          ", cycle ", e.cycle, ")")
 
 mutable struct Clock
     name::Symbol
@@ -53,7 +74,8 @@ the clocks that drive it.
 [`@tick`](@ref VeriJul.DSL.@tick) wait on it unless told otherwise. Add more
 clocks with [`add_clock!`](@ref VeriJul.SimCore.add_clock!).
 
-`sim.time` is the simulation time of the most recent clock edge.
+`sim.time` is the simulation time of the most recent clock edge, and
+`sim.cycle` counts the rising edges of the main clock so far.
 
 The clocks run in lockstep with the testbench: simulated time only advances
 while testbench code is waiting in [`tick`](@ref VeriJul.SimCore.tick), so
@@ -71,6 +93,8 @@ mutable struct Simulator
     started::Bool   # true once the clocks have evaluated the design at least once
     participants::Set{Task}   # @testbench tasks the clock waits for
     ready::Condition          # notified when a task starts waiting or a testbench ends
+    cycle::Int64              # rising edges of the main clock so far
+    evaluated::Condition      # notified after every evaluation (any clock edge)
 end
 
 model_of(m::VerilatedModel) = m
@@ -96,7 +120,8 @@ function input_setter(::VerilatedModel, model::VerilatedModel, name::Symbol, wha
 end
 
 function Simulator(dut::Union{DUT,VerilatedModel}; clock::Symbol=:clk, half_period::Integer=5)
-    sim = Simulator(dut, model_of(dut), 0, Clock[], nothing, false, false, Set{Task}(), Condition())
+    sim = Simulator(dut, model_of(dut), 0, Clock[], nothing, false, false, Set{Task}(), Condition(),
+                    0, Condition())
     add_clock!(sim, clock; half_period=half_period)
     return sim
 end
@@ -147,6 +172,7 @@ function waiting_tasks(sim::Simulator)
         union!(waiting, c.rising.waitq)
         union!(waiting, c.falling.waitq)
     end
+    union!(waiting, sim.evaluated.waitq)
     return waiting
 end
 
@@ -185,15 +211,26 @@ function wait_until_ready(sim::Simulator)
 end
 
 """
-    launch(f, sim) -> Task
+    launch(f, sim, args...; kwargs...) -> Task
 
-Runs `f(sim)` as a testbench task that the clock waits for: no edge happens
+Runs `f(sim, args...; kwargs...)` as a testbench task that the clock waits for: no edge happens
 while it is busy between two ticks. [`@testbench`](@ref VeriJul.DSL.@testbench)
 launchers use this.
+
+The task records `@test` results into the `@testset` that was active when it
+was launched, adding the simulation time and cycle to every failure. If `f`
+throws, the task fails with a [`TestbenchError`](@ref VeriJul.SimCore.TestbenchError)
+saying when.
 """
-function launch(f, sim::Simulator)
+function launch(f, sim::Simulator, args...; kwargs...)
+    name = Symbol(nameof(f))
+    parent = capture_testsets()
     task = @task try
-        f(sim)
+        with_sim_testset(parent, sim, name) do
+            f(sim, args...; kwargs...)
+        end
+    catch err
+        throw(testbench_error(err, catch_backtrace(), sim, name))
     finally
         delete!(sim.participants, current_task())
         notify(sim.ready)
@@ -208,6 +245,7 @@ function wake_all(sim::Simulator, err)
         notify(c.rising, err; error=true)
         notify(c.falling, err; error=true)
     end
+    notify(sim.evaluated, err; error=true)
 end
 
 """
@@ -245,9 +283,12 @@ function start_clock!(sim::Simulator, half_period::Union{Integer,Nothing}=nothin
             end
             Interop.eval_step!(sim.model, t)
             sim.started = true
+            main = sim.clocks[1]
+            any(c -> c === main, toggled) && main.value == 0x01 && (sim.cycle += 1)
             for c in toggled
                 notify(c.value == 0x01 ? c.rising : c.falling)
             end
+            notify(sim.evaluated)
             yield()
         end
     catch err
@@ -299,26 +340,131 @@ function tick(sim::Simulator, n::Integer=1; clock::Union{Symbol,Nothing}=nothing
     cond = edge === :rising ? c.rising : c.falling
     n == 0 && return sim
 
-    timer = nothing
-    done = Ref(false)
-    if timeout !== nothing
-        waiter = current_task()
-        timer = Timer(timeout) do _
-            # Interrupt the wait unless the task has already moved on
-            done[] || schedule(waiter, TickTimeout(timeout); error=true)
-        end
-    end
-    try
+    with_timeout(timeout) do
         for _ in 1:n
-            sim.running || throw(ClockStopped())
-            notify(sim.ready)   # the clock runs once this task is waiting
-            wait(cond)
+            wait_for(sim, cond)
         end
-    finally
-        done[] = true
-        timer === nothing || close(timer)
     end
     return sim
+end
+
+# Wait on one of the simulator's Conditions, letting the clock run meanwhile.
+function wait_for(sim::Simulator, cond::Condition)
+    sim.running || throw(ClockStopped())
+    notify(sim.ready)   # the clock runs once this task is waiting
+    return wait(cond)
+end
+
+# Run `f()`, interrupting it with a TickTimeout after `timeout` wall-clock seconds.
+function with_timeout(f, timeout::Union{Real,Nothing})
+    timeout === nothing && return f()
+    done = Ref(false)
+    waiter = current_task()
+    timer = Timer(timeout) do _
+        # Interrupt the wait unless the task has already moved on
+        done[] || schedule(waiter, TickTimeout(timeout); error=true)
+    end
+    try
+        return f()
+    finally
+        done[] = true
+        close(timer)
+    end
+end
+
+"""
+    wait_until(cond, sim; max_cycles=nothing, clock=nothing, edge=:rising, timeout=nothing) -> Int
+
+Waits until `cond()` returns `true`, checking it now and then after every
+rising edge of the main clock (or the `edge` of `clock`). Returns the number
+of edges waited, so `0` means the condition already held.
+
+`max_cycles` limits how many edges to wait: when it runs out, a
+[`WaitTimeout`](@ref VeriJul.SimCore.WaitTimeout) with the simulation time is
+thrown. `timeout` is a wall-clock limit in seconds, as for
+[`tick`](@ref VeriJul.SimCore.tick).
+
+```julia
+wait_until(sim; max_cycles=100) do
+    dut.valid == 1
+end
+```
+
+[`@wait_until`](@ref VeriJul.DSL.@wait_until) is shorthand that also puts the
+condition's source text in the error message.
+"""
+function wait_until(cond, sim::Simulator; max_cycles::Union{Integer,Nothing}=nothing,
+                    clock::Union{Symbol,Nothing}=nothing, edge::Symbol=:rising,
+                    timeout::Union{Real,Nothing}=nothing, what::AbstractString="the condition")
+    edge in (:rising, :falling) || throw(ArgumentError("edge must be :rising or :falling"))
+    max_cycles === nothing || max_cycles >= 0 || throw(ArgumentError("max_cycles must be non-negative"))
+    c = find_clock(sim, clock)
+    edge_cond = edge === :rising ? c.rising : c.falling
+    cond() && return 0
+    return with_timeout(timeout) do
+        n = 0
+        while true
+            max_cycles !== nothing && n >= max_cycles &&
+                throw(WaitTimeout(what, max_cycles, sim.time, sim.cycle))
+            wait_for(sim, edge_cond)
+            n += 1
+            cond() && return n
+        end
+    end
+end
+
+"""
+    wait_edge(sim, port; edge=:rising, max_cycles=nothing, clock=nothing, timeout=nothing)
+
+Waits for a port of the design to change, and returns its new value.
+`edge` is `:rising` (0 → 1) or `:falling` (1 → 0) for 1-bit ports, or
+`:change` for any change of a port of any width.
+
+The port is sampled after every evaluation of the design, that is after each
+edge of any clock, since that is when outputs change. Inputs set by another
+testbench are seen at the next evaluation.
+
+`max_cycles` counts rising edges of the main clock (or of `clock`); when it
+runs out a [`WaitTimeout`](@ref VeriJul.SimCore.WaitTimeout) is thrown.
+`timeout` is a wall-clock limit in seconds. Needs a simulator built from a
+[`DUT`](@ref VeriJul.Device.DUT).
+
+```julia
+wait_edge(sim, :done)                     # wait for `done` to go high
+wait_edge(sim, :state; edge=:change)      # wait for the FSM to move
+```
+"""
+function wait_edge(sim::Simulator, port::Symbol; edge::Symbol=:rising,
+                   max_cycles::Union{Integer,Nothing}=nothing,
+                   clock::Union{Symbol,Nothing}=nothing, timeout::Union{Real,Nothing}=nothing)
+    edge in (:rising, :falling, :change) ||
+        throw(ArgumentError("edge must be :rising, :falling or :change"))
+    max_cycles === nothing || max_cycles >= 0 || throw(ArgumentError("max_cycles must be non-negative"))
+    dut = sim.dut
+    dut isa DUT || error("wait_edge needs a Simulator built from a DUT (see load_dut)")
+    h = Device.handle(dut, port)
+    edge !== :change && h.port.width != 1 &&
+        throw(ArgumentError("Port `$port` is $(h.port.width) bits wide; use edge=:change " *
+                            "(rising and falling edges are for 1-bit ports)"))
+    c = find_clock(sim, clock)
+    fired(old, new) = edge === :change ? new != old :
+                      edge === :rising ? (old == 0 && new != 0) : (old != 0 && new == 0)
+    what = edge === :change ? "a change of `$port`" : "a $edge edge of `$port`"
+
+    return with_timeout(timeout) do
+        old = getproperty(dut, port)
+        n = 0
+        while true
+            max_cycles !== nothing && n >= max_cycles &&
+                throw(WaitTimeout(what, max_cycles, sim.time, sim.cycle))
+            wait_for(sim, sim.evaluated)
+            new = getproperty(dut, port)
+            fired(old, new) && return new
+            old = new
+            # Count cycles of the chosen clock: did it just rise?
+            (c.value == 0x01 && c.next_toggle - c.half_period == sim.time) && (n += 1)
+        end
+    end
 end
 
 """
@@ -339,5 +485,7 @@ function reset!(sim::Simulator, port::Symbol=:rst; cycles::Integer=2, active_hig
     end
     return sim
 end
+
+include("testsets.jl")
 
 end
