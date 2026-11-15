@@ -168,3 +168,22 @@ end
     libs = [last(split(strip(String(take!(o))), '\n')) for o in outs]
     @test libs[1] == libs[2]                           # one build, reused by the other
 end
+
+@testset "Lockstep: sleeping between ticks never skips an edge" begin
+    dut = load_dut(joinpath(examples, "filter.v"), "filter"; build_dir=joinpath(build_root, "filter_lockstep"))
+    sim = Simulator(dut)
+    start_clock!(sim)
+    dut.in_data = 0
+    @tick sim 6                              # flush the history
+    dut.in_data = 0xFF
+    times, outs = Int[], Int[]
+    for _ in 1:6
+        @tick sim
+        push!(times, sim.time); push!(outs, dut.out_data)
+        sleep(0.002)                         # used to let ~1000 cycles slip by
+    end
+    stop_clock!(sim)
+    destroy!(dut)
+    @test all(==(10), diff(times))
+    @test outs == [0, 63, 127, 191, 255, 255]
+end

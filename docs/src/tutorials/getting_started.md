@@ -60,6 +60,11 @@ for cycle in 1:6
 end
 ```
 
+The clock runs in lockstep with your code: simulated time only advances
+while you are waiting in `@tick`. Printing, sleeping or any other work
+between ticks never makes you miss an edge, which is why the times above are
+exactly 10 apart.
+
 The output ramps up over four cycles as the history fills with `0xFF`, one
 cycle later than you might expect because `out_data` is itself a register.
 

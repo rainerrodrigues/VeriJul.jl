@@ -26,6 +26,7 @@ tick
 @tick
 reset!
 @testbench
+VeriJul.SimCore.launch
 ClockStopped
 TickTimeout
 ```

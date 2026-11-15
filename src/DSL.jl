@@ -1,6 +1,6 @@
 module DSL
 
-using ..SimCore: Simulator, tick
+using ..SimCore: Simulator, tick, launch
 export @tick, @testbench
 
 """
@@ -33,6 +33,10 @@ end
 Defines `func` as usual and also a `launch_<func>(sim::Simulator)` that runs it
 as an asynchronous task, so it can wait on clock edges with [`@tick`](@ref VeriJul.DSL.@tick).
 
+The clock waits for every launched testbench: no edge happens while any of
+them is busy between two ticks, so a driver and a monitor running together
+both see every edge. A finished testbench no longer holds the clock back.
+
 ```julia
 @testbench function drive(sim)
     sim.dut.in_data = 0xFF
@@ -61,7 +65,7 @@ macro testbench(expr)
         
         # Creates a launcher for it
         function $(esc(Symbol("launch_", func_name)))(sim::Simulator)
-            @async $(esc(func_name))(sim)
+            launch($(esc(func_name)), sim)
         end
     end
 end

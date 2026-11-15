@@ -36,4 +36,6 @@ input. Values follow the same rules as `DUT` properties (see
 `sim.rising_edge` and `sim.falling_edge` are the `Condition`s that the main
 clock notifies on each edge, and `sim.clk_val` is the main clock's current
 value. [`tick`](@ref) is usually more convenient than waiting on them
-directly.
+directly. Waiting on them directly still keeps the clock in lockstep, but
+the clock only notices such waits by checking every 10 ms, so `tick` is
+also faster.

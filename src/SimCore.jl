@@ -54,6 +54,12 @@ the clocks that drive it.
 clocks with [`add_clock!`](@ref VeriJul.SimCore.add_clock!).
 
 `sim.time` is the simulation time of the most recent clock edge.
+
+The clocks run in lockstep with the testbench: simulated time only advances
+while testbench code is waiting in [`tick`](@ref VeriJul.SimCore.tick), so
+printing, sleeping or any other I/O between ticks never skips an edge. Run
+concurrent testbenches with [`@testbench`](@ref VeriJul.DSL.@testbench) so
+the clock waits for all of them.
 """
 mutable struct Simulator
     dut::Union{DUT,VerilatedModel}
@@ -63,6 +69,8 @@ mutable struct Simulator
     clock_task::Union{Task,Nothing}
     running::Bool
     started::Bool   # true once the clocks have evaluated the design at least once
+    participants::Set{Task}   # @testbench tasks the clock waits for
+    ready::Condition          # notified when a task starts waiting or a testbench ends
 end
 
 model_of(m::VerilatedModel) = m
@@ -88,7 +96,7 @@ function input_setter(::VerilatedModel, model::VerilatedModel, name::Symbol, wha
 end
 
 function Simulator(dut::Union{DUT,VerilatedModel}; clock::Symbol=:clk, half_period::Integer=5)
-    sim = Simulator(dut, model_of(dut), 0, Clock[], nothing, false, false)
+    sim = Simulator(dut, model_of(dut), 0, Clock[], nothing, false, false, Set{Task}(), Condition())
     add_clock!(sim, clock; half_period=half_period)
     return sim
 end
@@ -132,6 +140,69 @@ function find_clock(sim::Simulator, name::Union{Symbol,Nothing})
     return sim.clocks[i]
 end
 
+# Tasks currently waiting for an edge of any clock.
+function waiting_tasks(sim::Simulator)
+    waiting = Set{Task}()
+    for c in sim.clocks
+        union!(waiting, c.rising.waitq)
+        union!(waiting, c.falling.waitq)
+    end
+    return waiting
+end
+
+# Testbenches blocked in wait/fetch on another testbench (e.g. a parent
+# waiting for a child it launched). They aren't busy, so they mustn't hold
+# the clock back; the child's own state decides instead.
+function waiting_on_testbenches(sim::Simulator)
+    waiting = Set{Task}()
+    for t in sim.participants
+        done = getfield(t, :donenotify)
+        done isa Base.GenericCondition && union!(waiting, done.waitq)
+    end
+    return waiting
+end
+
+# The next edge may happen once someone is waiting for an edge and no
+# registered testbench is still busy between two ticks.
+function can_advance(sim::Simulator)
+    on_edge = waiting_tasks(sim)
+    isempty(on_edge) && return false
+    on_child = waiting_on_testbenches(sim)
+    return all(t -> t in on_edge || t in on_child || istaskdone(t), sim.participants)
+end
+
+function wait_until_ready(sim::Simulator)
+    while sim.running && !can_advance(sim)
+        # Explicit notifications cover tick() and @testbench tasks; the timer
+        # also catches tasks that wait on the edge Conditions directly.
+        timer = Timer(_ -> notify(sim.ready), 0.01)
+        try
+            wait(sim.ready)
+        finally
+            close(timer)
+        end
+    end
+end
+
+"""
+    launch(f, sim) -> Task
+
+Runs `f(sim)` as a testbench task that the clock waits for: no edge happens
+while it is busy between two ticks. [`@testbench`](@ref VeriJul.DSL.@testbench)
+launchers use this.
+"""
+function launch(f, sim::Simulator)
+    task = @task try
+        f(sim)
+    finally
+        delete!(sim.participants, current_task())
+        notify(sim.ready)
+    end
+    push!(sim.participants, task)
+    schedule(task)
+    return task
+end
+
 function wake_all(sim::Simulator, err)
     for c in sim.clocks
         notify(c.rising, err; error=true)
@@ -142,9 +213,11 @@ end
 """
     start_clock!(sim[, half_period]) -> Task
 
-Starts the clocks in a background task. On each step it toggles the clocks
-due at the earliest time, evaluates the design (writing a waveform sample if
-tracing is on) and wakes tasks waiting in [`tick`](@ref VeriJul.SimCore.tick).
+Starts the clocks in a background task. Whenever the testbench is waiting
+in [`tick`](@ref VeriJul.SimCore.tick), it toggles the clocks due at the
+earliest time, evaluates the design (writing a waveform sample if tracing is
+on) and wakes the waiting tasks. Simulated time does not advance while the
+testbench is busy, so no edge is ever skipped.
 
 Passing `half_period` changes the main clock's half period.
 Throws if the clock is already running.
@@ -157,6 +230,8 @@ function start_clock!(sim::Simulator, half_period::Union{Integer,Nothing}=nothin
     sim.clock_task = @async try
         toggled = Clock[]
         while sim.running
+            wait_until_ready(sim)
+            sim.running || break
             t = minimum(c.next_toggle for c in sim.clocks)
             sim.time = t
             empty!(toggled)
@@ -194,6 +269,7 @@ Call this before `destroy!`-ing the design.
 """
 function stop_clock!(sim::Simulator)
     sim.running = false
+    notify(sim.ready)
     t = sim.clock_task
     t === nothing || wait(t)
     sim.clock_task = nothing
@@ -207,6 +283,10 @@ end
 Waits for `n` edges of a clock (the main clock unless `clock` is given).
 `edge` is `:rising` or `:falling`. `timeout` is a wall-clock limit in seconds;
 when it passes, a [`TickTimeout`](@ref VeriJul.SimCore.TickTimeout) is thrown.
+
+Simulated time only advances while testbench code is waiting here, so
+whatever the task does between ticks (printing, sleeping, I/O) never makes it
+miss an edge.
 
 Throws [`ClockStopped`](@ref VeriJul.SimCore.ClockStopped) if the clock isn't
 running. [`@tick`](@ref VeriJul.DSL.@tick) is shorthand for this.
@@ -231,6 +311,7 @@ function tick(sim::Simulator, n::Integer=1; clock::Union{Symbol,Nothing}=nothing
     try
         for _ in 1:n
             sim.running || throw(ClockStopped())
+            notify(sim.ready)   # the clock runs once this task is waiting
             wait(cond)
         end
     finally
