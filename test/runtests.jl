@@ -287,6 +287,28 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         stop_clock!(sim)
     end
 
+    @testset "Lockstep: a testbench can wait for a child testbench (mock design)" begin
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        @testbench function child(sim)
+            @tick sim 3
+            return sim.time
+        end
+        @testbench function parent(sim)
+            @tick sim
+            t_child = fetch(launch_child(sim))     # parent waits on the child, not an edge
+            @tick sim 2
+            return (t_child, sim.time)
+        end
+        start_clock!(sim)
+        t_child, t_end = within(10) do
+            fetch(launch_parent(sim))
+        end
+        @test t_end == t_child + 20
+        @test isempty(sim.participants)
+        stop_clock!(sim)
+    end
+
     @testset "Lockstep: waiting on sim.rising_edge directly still works (mock design)" begin
         dut = MockDesign.make_dut()
         sim = Simulator(dut)

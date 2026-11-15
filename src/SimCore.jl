@@ -150,12 +150,25 @@ function waiting_tasks(sim::Simulator)
     return waiting
 end
 
+# Testbenches blocked in wait/fetch on another testbench (e.g. a parent
+# waiting for a child it launched). They aren't busy, so they mustn't hold
+# the clock back; the child's own state decides instead.
+function waiting_on_testbenches(sim::Simulator)
+    waiting = Set{Task}()
+    for t in sim.participants
+        done = getfield(t, :donenotify)
+        done isa Base.GenericCondition && union!(waiting, done.waitq)
+    end
+    return waiting
+end
+
 # The next edge may happen once someone is waiting for an edge and no
 # registered testbench is still busy between two ticks.
 function can_advance(sim::Simulator)
-    waiting = waiting_tasks(sim)
-    isempty(waiting) && return false
-    return all(t -> t in waiting || istaskdone(t), sim.participants)
+    on_edge = waiting_tasks(sim)
+    isempty(on_edge) && return false
+    on_child = waiting_on_testbenches(sim)
+    return all(t -> t in on_edge || t in on_child || istaskdone(t), sim.participants)
 end
 
 function wait_until_ready(sim::Simulator)
