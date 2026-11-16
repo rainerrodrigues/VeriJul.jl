@@ -4,3 +4,4 @@ VeriJul = "a90675a2-a9ae-420a-b66a-bece10430f60"
 
 [compat]
 Documenter = "1"
+VeriJul = "0.1"
