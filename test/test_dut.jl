@@ -241,3 +241,72 @@ end
     stop_clock!(sim)
     destroy!(dut)
 end
+
+@testset "Internal signals, streams, scoreboard and coverage (fifo.v)" begin
+    dut = load_dut(joinpath(examples, "fifo.v"), "fifo"; internals=true,
+                   build_dir=joinpath(build_root, "fifo"))
+    names = signals(dut)
+    @test all(n -> n in names, ["count", "rd_ptr", "wr_ptr", "s_ready", "m_data"])
+    cnt = signal(dut, "count")
+    @test cnt.width == 3 && sprint(show, cnt) == "Signal(count, 3 bits)"
+    @test_throws ErrorException signal(dut, "no_such_signal")
+    @test signal(dut, "TOP.fifo.wr_ptr").width == 2               # full VPI names work too
+
+    sim = Simulator(dut)
+    start_clock!(sim)
+    reset!(sim)
+    @test cnt[] == 0 && dut["count"] == 0
+
+    inp = StreamBus(data=:s_data, valid=:s_valid, ready=:s_ready)
+    out = StreamBus(data=:m_data, valid=:m_valid, ready=:m_ready)
+
+    # Fill it with nobody reading: it holds DEPTH words, then stops accepting
+    send!(sim, inp, [0x11, 0x22, 0x33, 0x44])
+    @test cnt[] == 4 && dut.s_ready == 0
+    @test_throws WaitTimeout send!(sim, inp, [0x55]; max_cycles=5)
+    @test dut.s_valid == 0                                        # left low, even after an error
+    @test receive!(sim, out, 4) == [0x11, 0x22, 0x33, 0x44]
+    @test cnt[] == 0 && dut.m_ready == 0
+    @test_throws WaitTimeout receive!(sim, out, 1; max_cycles=5)
+
+    # Random gaps and backpressure, checked by a monitor and a scoreboard,
+    # with coverage of the internal occupancy
+    rng = Random.Xoshiro(7)
+    data = rand(rng, UInt8, 60)
+    sb = expect!(Scoreboard("fifo"; sim), data...)
+    mon = StreamMonitor(sim, out; on_item = x -> observe!(sb, x))
+    cg = CoverGroup("occupancy", :count => 0:4, :full => [true, false]; cross=[(:count, :full)])
+    @testbench function sample_occupancy(sim, cg, done)
+        while !done[]
+            @tick sim
+            sample!(cg; count = Int(cnt[]), full = sim.dut.s_ready == 0)
+        end
+    end
+    @testbench tx(sim, data, rng) = send!(sim, inp, data; idle=0.3, rng)
+    @testbench rx(sim, n, rng) = receive!(sim, out, n; ready=0.4, rng)
+    done = Ref(false)
+    s = launch_sample_occupancy(sim, cg, done)
+    t = launch_tx(sim, data, rng)
+    r = launch_rx(sim, length(data), rng)
+    wait(t)
+    @test fetch(r) == data
+    @tick sim
+    done[] = true
+    wait(s)
+    @test stop!(mon) == data && length(mon.times) == length(data) && issorted(mon.times)
+    @test passed(sb) && sb.matched == length(data)
+    @test coverage(cg, :count) == 1                               # empty through full
+    @test "count × full: (0, true)" in uncovered(cg)              # impossible combinations stay open
+
+    # Writing an internal signal deposits a value until the logic changes it
+    dut["count"] = 2
+    @test cnt[] == 2 && dut.m_valid == 0                          # outputs update at the next evaluation
+    settle!(dut)
+    @test dut.m_valid == 1
+    reset!(sim)
+    @test cnt[] == 0
+    @test_throws ErrorException signal(dut, "DEPTH")[] = 8        # parameters can't be written
+
+    stop_clock!(sim)
+    destroy!(dut)
+end

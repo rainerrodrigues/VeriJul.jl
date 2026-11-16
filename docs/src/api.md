@@ -41,6 +41,39 @@ ClockStopped
 TickTimeout
 ```
 
+## Verification components
+
+```@docs
+StreamBus
+send!
+receive!
+StreamMonitor
+stop!
+Scoreboard
+expect!
+observe!
+passed
+```
+
+## Internal signal access
+
+```@docs
+signal
+signals
+Signal
+```
+
+## Coverage and random stimulus
+
+```@docs
+CoverGroup
+sample!
+coverage
+uncovered
+bins
+test_seed
+```
+
 ## Building
 
 ```@docs

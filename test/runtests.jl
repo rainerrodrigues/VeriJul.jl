@@ -1,6 +1,7 @@
 using Test
 using Aqua
 using VeriJul
+using Random
 using VeriJul.Builder: extract_ports, generate_bindings, verilator_version, verilator_cmd,
                        prepare_build_dir, claim_build_dir, clear_build_dir, cached_build,
                        cxx_cmd, build_cache, clear_build_cache, BUILD_MARKER, BUILD_LOCK, BUILD_RECORD
@@ -560,6 +561,77 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         @test err.task.exception isa TestbenchError && err.task.exception.testbench == :crashes
         @test isempty(sim.participants)
         stop_clock!(sim)
+    end
+
+    @testset "Coverage" begin
+        cg = CoverGroup("inputs",
+            :a => ["zero" => 0, "small" => 1:15, "large" => x -> x >= 16],
+            :op => [:add, :sub];
+            cross = [(:a, :op)])
+        @test coverage(cg) == 0 && length(uncovered(cg)) == 3 + 2 + 6
+        sample!(cg; a = 0, op = :add)
+        sample!(cg, (a = 300, op = :sub))
+        @test coverage(cg, :a) ≈ 2 / 3 && coverage(cg, :op) == 1
+        @test coverage(cg) ≈ (2 + 2 + 2) / 11
+        @test "a: small" in uncovered(cg) && "a × op: (small, :add)" in uncovered(cg)
+        for a in (0, 5, 20), op in (:add, :sub)
+            sample!(cg; a, op)
+        end
+        @test coverage(cg) == 1 && isempty(uncovered(cg)) && cg.samples == 8
+        report = sprint(show, MIME"text/plain"(), cg)
+        @test occursin("100.0% covered, 8 samples", report) && occursin("6 of 6 combinations", report)
+
+        # A value can fall into several bins; all of them count
+        overlap = CoverGroup("overlap", :x => ["low" => 0:10, "even" => iseven])
+        sample!(overlap; x = 4)
+        @test coverage(overlap) == 1
+
+        @test bins(0:255, 4) == ["0:63" => 0:63, "64:127" => 64:127, "128:191" => 128:191, "192:255" => 192:255]
+        @test bins(1:10, 3) == ["1:3" => 1:3, "4:6" => 4:6, "7:10" => 7:10]
+        @test_throws ArgumentError bins(1:3, 5)
+        @test_throws ArgumentError sample!(cg; a = 1)                  # `op` missing
+        @test_throws ArgumentError CoverGroup("bad", :x => [])
+        @test_throws ArgumentError CoverGroup("bad", :x => [1, 1])
+        @test_throws ArgumentError CoverGroup("bad", :x => [1]; cross = [(:x, :y)])
+        @test_throws ArgumentError coverage(cg, :nope)
+
+        withenv("VERIJUL_SEED" => "0x2a") do
+            @test (@test_logs (:info, r"from VERIJUL_SEED") test_seed()) == 0x2a
+        end
+        withenv("VERIJUL_SEED" => nothing) do
+            @test (@test_logs (:info, r"rerun with VERIJUL_SEED=0x") test_seed()) isa UInt64
+        end
+    end
+
+    @testset "Scoreboard" begin
+        sb = Scoreboard("demo")
+        expect!(sb, 1, 2, 3)
+        @test observe!(sb, 1) && !observe!(sb, 5) && observe!(sb, 3)
+        @test !passed(sb) && sb.matched == 2
+        observe!(sb, 9)                                            # nothing expected any more
+        report = sprint(show, MIME"text/plain"(), sb)
+        @test occursin("demo: 2 matched, 2 mismatched, 0 still expected", report)
+        @test occursin("#2: expected 2, got 5", report)
+        @test occursin("#4: got 9 but nothing was expected", report)
+
+        sb2 = expect!(Scoreboard(; compare = (e, g) -> abs(e - g) <= 1), 10, 20, 30)
+        observe!(sb2, 11); observe!(sb2, 19)
+        @test !passed(sb2)                                         # 30 never seen
+        @test occursin("never seen: 30", sprint(show, MIME"text/plain"(), sb2))
+        observe!(sb2, 30)
+        @test passed(sb2)
+    end
+
+    @testset "Internal signals need internals=true (mock design)" begin
+        dut = MockDesign.make_dut()
+        err = try signal(dut, "count"); nothing catch e; e end
+        @test err isa ErrorException && occursin("internals=true", err.msg)
+        @test_throws ErrorException dut["count"]
+        @test_throws ErrorException signals(dut)
+        cpp, _ = generate_bindings([HardwarePort("clk", :in, 1)], "top"; internals=true)
+        @test occursin("top_signal_read", cpp) && occursin("verilated_vpi.h", cpp)
+        cpp, _ = generate_bindings([HardwarePort("clk", :in, 1)], "top")
+        @test !occursin("vpi", cpp)
     end
 
     @testset "Aqua quality checks" begin

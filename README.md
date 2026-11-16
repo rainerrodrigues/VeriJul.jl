@@ -59,6 +59,11 @@ Also included:
   for designs whose latency varies
 - `@test` inside concurrent `@testbench` tasks, recorded in your `@testset`,
   with failures that report the simulation time and cycle
+- valid/ready stream components (`send!`, `receive!`, `StreamMonitor`) with
+  random gaps and backpressure, and a `Scoreboard`
+- internal signals by name with `load_dut(...; internals=true)`: `dut["u_core.state"]`
+- functional coverage (`CoverGroup`, `sample!`, `coverage`) and reproducible
+  random seeds (`test_seed`)
 - `reset!`, and timeouts so stuck testbenches fail instead of hanging
 - ports of any width, with wide ports as `BigInt`
 
