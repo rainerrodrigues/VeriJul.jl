@@ -113,9 +113,13 @@ function launch(f, sim::Simulator, args...; kwargs...)
         end
     catch err
         tberr = testbench_error(err, catch_backtrace(), sim, name)
-        # A failure while the clock runs stops it; errors caused by an
-        # ordinary stop_clock! (ClockStopped) don't count as failures
-        sim.running && sim.stop_on_error && fail!(sim, tberr)
+        # Errors caused by an ordinary stop_clock! (ClockStopped) aren't
+        # failures. A real failure is reported to the hooks (e.g. a
+        # WaveRecorder) and, unless stop_on_error=false, stops the clock.
+        if sim.running
+            run_failure_hooks(sim, tberr)
+            sim.stop_on_error && fail!(sim, tberr)
+        end
         throw(tberr)
     finally
         delete!(sim.participants, current_task())
@@ -132,10 +136,20 @@ function fail!(sim::Simulator, err)
     sim.failure = err
     sim.running = false
     notify(sim.ready)
-    for h in sim.hooks
-        on_failure(h, sim, err)
-    end
     wake_all(sim, err)
+end
+
+# Tell the hooks about a failure (a testbench error or a failed @test). A
+# hook that throws, such as a recorder that can't write its file, is logged
+# and never stops the failure itself from being reported.
+function run_failure_hooks(sim::Simulator, err)
+    for h in sim.hooks
+        try
+            on_failure(h, sim, err)
+        catch hook_err
+            @error "A simulator hook failed while handling a failure" hook = h exception = (hook_err, catch_backtrace())
+        end
+    end
 end
 
 function wake_all(sim::Simulator, err)

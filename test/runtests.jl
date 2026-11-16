@@ -797,6 +797,42 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         stop_clock!(sim)
     end
 
+    @testset "Failure hooks never hide a failure (mock design)" begin
+        @testbench function fails_at_cycle_2(sim)
+            @tick sim 2
+            error("broken")
+        end
+        # A recorder that can't write its file: the failure still reaches the caller
+        blocker = tempname(); write(blocker, "a file, not a directory")
+        sim = Simulator(MockDesign.make_dut())
+        WaveRecorder(sim; cycles=5, dir=joinpath(blocker, "waves"))
+        start_clock!(sim)
+        # (launched inside @test_logs, so the testbench task logs to the test logger)
+        err = @test_logs (:error, r"hook failed") match_mode=:any begin
+            launch_fails_at_cycle_2(sim)
+            within(10) do
+                try tick(sim, 10^9); nothing catch e; e end
+            end
+        end
+        @test err isa TestbenchError && err.error.msg == "broken"
+        stop_clock!(sim)
+
+        # With stop_on_error=false the recorder still saves on a thrown error
+        dir = mktempdir()
+        sim = Simulator(MockDesign.make_dut(); stop_on_error=false)
+        WaveRecorder(sim; cycles=5, dir=dir)
+        start_clock!(sim)
+        @test_logs (:info, r"Saved the last 5 cycles") match_mode=:any begin
+            t = launch_fails_at_cycle_2(sim)
+            within(10) do
+                try wait(t) catch end
+                tick(sim, 2)
+            end
+        end
+        @test readdir(dir) == ["failure_1.vcd"] && sim.running
+        stop_clock!(sim)
+    end
+
     @testset "Coverage" begin
         cg = CoverGroup("inputs",
             :a => ["zero" => 0, "small" => 1:15, "large" => x -> x >= 16],

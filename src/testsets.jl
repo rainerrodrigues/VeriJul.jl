@@ -58,11 +58,7 @@ sim_context(ts::SimTestSet) =
 Test.record(ts::SimTestSet, res) = Test.record(ts.parent, res)
 
 # Tell the simulator's hooks (e.g. a WaveRecorder) that a check failed
-function notify_hooks(sim, res)
-    for h in sim.hooks
-        on_failure(h, sim, res)
-    end
-end
+notify_hooks(sim, res) = run_failure_hooks(sim, res)
 
 function Test.record(ts::SimTestSet, res::Test.Fail)
     ctx = sim_context(ts)
