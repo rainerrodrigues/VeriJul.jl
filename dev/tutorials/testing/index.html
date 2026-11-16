@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="referrer" content="no-referrer"/><title>Testing with Test.jl · VeriJul.jl</title><meta name="title" content="Testing with Test.jl · VeriJul.jl"/><meta property="og:title" content="Testing with Test.jl · VeriJul.jl"/><meta property="twitter:title" content="Testing with Test.jl · VeriJul.jl"/><meta name="description" content="Documentation for VeriJul.jl."/><meta property="og:description" content="Documentation for VeriJul.jl."/><meta property="twitter:description" content="Documentation for VeriJul.jl."/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.63.2/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../">VeriJul.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../getting_started/">Getting started</a></li><li><a class="tocitem" href="../testbenches/">Self-checking testbenches</a></li><li><a class="tocitem" href="../waiting/">Waiting for events</a></li><li class="is-active"><a class="tocitem" href>Testing with Test.jl</a><ul class="internal"><li><a class="tocitem" href="#@test-inside-testbenches"><span><code>@test</code> inside testbenches</span></a></li><li><a class="tocitem" href="#What-a-failure-looks-like"><span>What a failure looks like</span></a></li><li><a class="tocitem" href="#A-testbench-that-throws"><span>A testbench that throws</span></a></li><li><a class="tocitem" href="#Organizing-a-test-suite"><span>Organizing a test suite</span></a></li></ul></li><li><a class="tocitem" href="../build_and_clocks/">Build options and multiple clocks</a></li><li><a class="tocitem" href="../ports/">Ports and wide signals</a></li></ul></li><li><a class="tocitem" href="../../guides/low_level/">Lower-level API</a></li><li><a class="tocitem" href="../../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li class="is-active"><a href>Testing with Test.jl</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Testing with Test.jl</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/rainerrodrigues/VeriJul.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/rainerrodrigues/VeriJul.jl/blob/main/docs/src/tutorials/testing.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Testing-with-Test.jl"><a class="docs-heading-anchor" href="#Testing-with-Test.jl">Testing with Test.jl</a><a id="Testing-with-Test.jl-1"></a><a class="docs-heading-anchor-permalink" href="#Testing-with-Test.jl" title="Permalink"></a></h1><p>VeriJul testbenches are ordinary Julia code, so the standard <code>Test</code> library works with them. Inside <a href="../../api/#VeriJul.DSL.@testbench"><code>@testbench</code></a> tasks it also knows about simulated time:</p><ul><li><code>@test</code> inside a testbench records into the <code>@testset</code> the testbench was launched from, so its results appear in the normal test summary.</li><li>A failing <code>@test</code> says <em>when</em> in the simulation it failed: the simulation time, the cycle and the testbench.</li><li>A testbench that throws fails with a <a href="../../api/#VeriJul.SimCore.TestbenchError"><code>TestbenchError</code></a> that says the same.</li></ul><p>This tutorial tests the GCD unit from <a href="../waiting/#Waiting-for-events">Waiting for events</a>.</p><pre><code class="language-julia hljs">using VeriJul, Test, Random
+
+dut = load_dut(joinpath(pkgdir(VeriJul), &quot;examples&quot;, &quot;gcd.v&quot;), &quot;gcd&quot;; build_dir=mktempdir())
+sim = Simulator(dut)
+start_clock!(sim)
+reset!(sim)</code></pre><h2 id="@test-inside-testbenches"><a class="docs-heading-anchor" href="#@test-inside-testbenches"><code>@test</code> inside testbenches</a><a id="@test-inside-testbenches-1"></a><a class="docs-heading-anchor-permalink" href="#@test-inside-testbenches" title="Permalink"></a></h2><p>A driver testbench sends random pairs to the design, and a checker testbench compares every answer with Julia&#39;s own <code>gcd</code>. They talk through a <code>Channel</code>, so the checker knows which inputs each answer belongs to:</p><pre><code class="language-julia hljs">@testbench function driver(sim, jobs, n)
+    for _ in 1:n
+        a, b = rand(1:500), rand(1:500)
+        put!(jobs, (a, b))
+        sim.dut.a = a
+        sim.dut.b = b
+        sim.dut.start = 1
+        @tick sim
+        sim.dut.start = 0
+        @wait_until sim sim.dut.done == 1 max_cycles=5000
+    end
+    close(jobs)
+end
+
+@testbench function checker(sim, jobs)
+    for (a, b) in jobs
+        wait_edge(sim, :done; max_cycles=5000)
+        @test sim.dut.result == gcd(a, b)
+    end
+end</code></pre><p><code>@testbench</code> launchers pass extra arguments on to the function. Launch them inside a <code>@testset</code> and <code>wait</code> for them there:</p><pre><code class="language-julia hljs">Random.seed!(42)
+jobs = Channel{Tuple{Int,Int}}(Inf)
+@testset &quot;gcd matches Base.gcd&quot; begin
+    d = launch_driver(sim, jobs, 50)
+    c = launch_checker(sim, jobs)
+    wait(d)
+    wait(c)
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">Test Summary:        | Pass  Total  Time
+gcd matches Base.gcd |   50     50  0.3s</code></pre><p>All 50 checks are counted in the <code>@testset</code>, even though they ran in a separate task.</p><h2 id="What-a-failure-looks-like"><a class="docs-heading-anchor" href="#What-a-failure-looks-like">What a failure looks like</a><a id="What-a-failure-looks-like-1"></a><a class="docs-heading-anchor-permalink" href="#What-a-failure-looks-like" title="Permalink"></a></h2><p>When a check inside a testbench fails, Test prints the usual report with a <code>Context</code> line that tells you where to look in the waveform:</p><pre><code class="language-text hljs">gcd matches Base.gcd: Test Failed at test/runtests.jl:24
+  Expression: sim.dut.result == gcd(a, b)
+   Evaluated: 0x0004 == 5
+     Context: simulation time 180, cycle 19, testbench `checker`</code></pre><p>With <a href="../../api/#VeriJul.Interop.enable_trace!"><code>enable_trace!</code></a> on, jump to time 180 in the VCD file.</p><h2 id="A-testbench-that-throws"><a class="docs-heading-anchor" href="#A-testbench-that-throws">A testbench that throws</a><a id="A-testbench-that-throws-1"></a><a class="docs-heading-anchor-permalink" href="#A-testbench-that-throws" title="Permalink"></a></h2><p>If a testbench throws, for example when a <code>max_cycles</code> limit runs out, <code>wait</code> and <code>fetch</code> throw a <code>TaskFailedException</code> that wraps a <a href="../../api/#VeriJul.SimCore.TestbenchError"><code>TestbenchError</code></a>. Inside a <code>@testset</code> that counts as an error, and the message names the testbench and the simulation time. You can also look at the fields:</p><pre><code class="language-julia hljs">@testbench function never_started(sim)
+    @tick sim                                       # let the last `done` pulse end
+    @wait_until sim sim.dut.done == 1 max_cycles=20
+end
+
+err = try
+    wait(launch_never_started(sim))
+catch e
+    e
+end
+tb = err.task.exception
+(tb.testbench, tb.time, tb.cycle, typeof(tb.error))</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">(:never_started, 16190, 1620, WaitTimeout)</code></pre><p>The message of the original error is kept:</p><pre><code class="language-julia hljs">sprint(showerror, tb.error)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">&quot;WaitTimeout: `sim.dut.done == 1` did not happen within 20 cycles (gave up at time 16190, cycle 1620)&quot;</code></pre><p>A testbench that waits for a failed child testbench passes the child&#39;s <code>TestbenchError</code> on unchanged, so the report always points at the testbench where things went wrong.</p><h2 id="Organizing-a-test-suite"><a class="docs-heading-anchor" href="#Organizing-a-test-suite">Organizing a test suite</a><a id="Organizing-a-test-suite-1"></a><a class="docs-heading-anchor-permalink" href="#Organizing-a-test-suite" title="Permalink"></a></h2><p>A <code>test/runtests.jl</code> for a design usually builds the design once and runs a fresh simulator per test set:</p><pre><code class="language-julia hljs">using VeriJul, Test
+
+const SRC = joinpath(@__DIR__, &quot;..&quot;, &quot;rtl&quot;, &quot;gcd.v&quot;)
+
+function with_sim(f)
+    dut = load_dut(SRC, &quot;gcd&quot;)          # cached after the first build
+    sim = Simulator(dut)
+    start_clock!(sim)
+    reset!(sim)
+    try
+        f(sim)
+    finally
+        stop_clock!(sim)
+        destroy!(dut)
+    end
+end
+
+@testset &quot;gcd&quot; begin
+    @testset &quot;small numbers&quot; begin
+        with_sim() do sim
+            wait(launch_checker(sim, ...))
+        end
+    end
+    @testset &quot;random numbers&quot; begin
+        # ...
+    end
+end</code></pre><p>Things to keep in mind:</p><ul><li>Launch testbenches from inside the <code>@testset</code> they belong to. On Julia 1.10–1.12, a task started with plain <code>@async</code> doesn&#39;t know the surrounding test set, so testbenches launched from it record their results outside it.</li><li>Always <code>wait</code> (or <code>fetch</code>) the testbenches you launch. Otherwise an error in one of them goes unnoticed and the test set ends before they finish.</li><li>A <code>@testset</code> <em>inside</em> a testbench groups its checks as usual: it is recorded into the test set the testbench was launched from, and its failures get the simulation context too.</li><li>Give every wait a <code>max_cycles</code> (or <code>timeout</code>), so a stuck design fails the test instead of hanging it.</li></ul><p>Next: <a href="../build_and_clocks/#Build-options-and-multiple-clocks">Build options and multiple clocks</a>.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../waiting/">« Waiting for events</a><a class="docs-footer-nextpage" href="../build_and_clocks/">Build options and multiple clocks »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.20.0 on <span class="colophon-date" title="Monday 16 November 2026 05:29">Monday 16 November 2026</span>. Using Julia version 1.13.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
