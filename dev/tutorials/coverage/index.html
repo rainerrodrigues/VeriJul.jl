@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="referrer" content="no-referrer"/><title>Random stimulus and coverage · VeriJul.jl</title><meta name="title" content="Random stimulus and coverage · VeriJul.jl"/><meta property="og:title" content="Random stimulus and coverage · VeriJul.jl"/><meta property="twitter:title" content="Random stimulus and coverage · VeriJul.jl"/><meta name="description" content="Documentation for VeriJul.jl."/><meta property="og:description" content="Documentation for VeriJul.jl."/><meta property="twitter:description" content="Documentation for VeriJul.jl."/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.63.2/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../">VeriJul.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../getting_started/">Getting started</a></li><li><a class="tocitem" href="../testbenches/">Self-checking testbenches</a></li><li><a class="tocitem" href="../waiting/">Waiting for events</a></li><li><a class="tocitem" href="../testing/">Testing with Test.jl</a></li><li><a class="tocitem" href="../streams/">Streams and scoreboards</a></li><li><a class="tocitem" href="../internals/">Internal signals</a></li><li class="is-active"><a class="tocitem" href>Random stimulus and coverage</a><ul class="internal"><li><a class="tocitem" href="#Reproducible-random-numbers"><span>Reproducible random numbers</span></a></li><li><a class="tocitem" href="#Describing-what-to-cover"><span>Describing what to cover</span></a></li><li><a class="tocitem" href="#Sampling"><span>Sampling</span></a></li><li><a class="tocitem" href="#Closing-the-gaps"><span>Closing the gaps</span></a></li></ul></li><li><a class="tocitem" href="../build_and_clocks/">Build options and multiple clocks</a></li><li><a class="tocitem" href="../ports/">Ports and wide signals</a></li></ul></li><li><a class="tocitem" href="../../guides/low_level/">Lower-level API</a></li><li><a class="tocitem" href="../../api/">API</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li class="is-active"><a href>Random stimulus and coverage</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Random stimulus and coverage</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/rainerrodrigues/VeriJul.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/rainerrodrigues/VeriJul.jl/blob/main/docs/src/tutorials/coverage.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Random-stimulus-and-coverage"><a class="docs-heading-anchor" href="#Random-stimulus-and-coverage">Random stimulus and coverage</a><a id="Random-stimulus-and-coverage-1"></a><a class="docs-heading-anchor-permalink" href="#Random-stimulus-and-coverage" title="Permalink"></a></h1><p>Random inputs find bugs that hand-written tests miss, because they try combinations nobody thought of. Two things make random testing practical:</p><ol><li><strong>Reproducibility.</strong> When a random test fails, you need to run exactly the same inputs again to debug it.</li><li><strong>Coverage.</strong> Random doesn&#39;t mean thorough. You need to know which interesting cases the inputs actually hit, and which they never did.</li></ol><p>This tutorial uses the GCD unit from <a href="../waiting/#Waiting-for-events">Waiting for events</a>.</p><pre><code class="language-julia hljs">using VeriJul, Test, Random
+
+dut = load_dut(joinpath(pkgdir(VeriJul), &quot;examples&quot;, &quot;gcd.v&quot;), &quot;gcd&quot;; build_dir=mktempdir())
+sim = Simulator(dut)
+start_clock!(sim)
+reset!(sim)
+
+function run_gcd(sim, a, b)
+    sim.dut.a = a; sim.dut.b = b; sim.dut.start = 1
+    @tick sim
+    sim.dut.start = 0
+    cycles = @wait_until sim sim.dut.done == 1 max_cycles=100_000
+    return sim.dut.result, cycles
+end</code></pre><h2 id="Reproducible-random-numbers"><a class="docs-heading-anchor" href="#Reproducible-random-numbers">Reproducible random numbers</a><a id="Reproducible-random-numbers-1"></a><a class="docs-heading-anchor-permalink" href="#Reproducible-random-numbers" title="Permalink"></a></h2><p>Give each test its own random number generator, seeded by <a href="../../api/#VeriJul.Coverage.test_seed"><code>test_seed</code></a>. It logs the seed, and takes it from the <code>VERIJUL_SEED</code> environment variable when that is set, so a failing run can be repeated exactly:</p><pre><code class="language-julia hljs">rng = Xoshiro(test_seed())</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">[ Info: Random seed 0x21eb8db0f599cd88; rerun with VERIJUL_SEED=0x21eb8db0f599cd88 to reproduce</code></pre><p>Pass <code>rng</code> to everything random in the test: <code>rand(rng, ...)</code>, and the <code>rng</code> keyword of <a href="../../api/#VeriJul.Components.send!"><code>send!</code></a> and <a href="../../api/#VeriJul.Components.receive!"><code>receive!</code></a>. Then a failure in CI can be replayed on your machine with <code>VERIJUL_SEED=0x… julia --project -e &#39;using Pkg; Pkg.test()&#39;</code>, using the seed from the log.</p><p>(This page uses a fixed seed, so it shows the same numbers every time it&#39;s built.)</p><pre><code class="language-julia hljs">rng = Xoshiro(2024)</code></pre><h2 id="Describing-what-to-cover"><a class="docs-heading-anchor" href="#Describing-what-to-cover">Describing what to cover</a><a id="Describing-what-to-cover-1"></a><a class="docs-heading-anchor-permalink" href="#Describing-what-to-cover" title="Permalink"></a></h2><p>A <a href="../../api/#VeriJul.Coverage.CoverGroup"><code>CoverGroup</code></a> lists the values to watch and sorts them into <em>bins</em>: the cases that should each happen at least once. For the GCD unit, interesting cases are zero inputs, small and large inputs, equal inputs, and how long the computation took:</p><pre><code class="language-julia hljs">size_bins = [&quot;zero&quot; =&gt; 0, &quot;one&quot; =&gt; 1, &quot;small&quot; =&gt; 2:15, &quot;medium&quot; =&gt; 16:255, &quot;large&quot; =&gt; 256:65535]
+
+cg = CoverGroup(&quot;gcd&quot;,
+    :a =&gt; size_bins,
+    :b =&gt; size_bins,
+    :equal =&gt; [true, false],
+    :cycles =&gt; [&quot;fast&quot; =&gt; 0:4, &quot;normal&quot; =&gt; 5:50, &quot;slow&quot; =&gt; x -&gt; x &gt; 50];
+    cross = [(:a, :b)])          # every combination of a&#39;s and b&#39;s size</code></pre><p>A bin is <code>&quot;label&quot; =&gt; matcher</code>, where the matcher is a range or collection, a predicate like <code>iseven</code>, or a single value, or just a value on its own. <a href="../../api/#VeriJul.Coverage.bins"><code>bins</code></a> splits a range into equal parts: <code>bins(0:255, 4)</code>.</p><h2 id="Sampling"><a class="docs-heading-anchor" href="#Sampling">Sampling</a><a id="Sampling-1"></a><a class="docs-heading-anchor-permalink" href="#Sampling" title="Permalink"></a></h2><p>Run random inputs and <a href="../../api/#VeriJul.Coverage.sample!"><code>sample!</code></a> each case:</p><pre><code class="language-julia hljs">@testset &quot;random gcd&quot; begin
+    for _ in 1:100
+        a, b = rand(rng, UInt16), rand(rng, UInt16)
+        result, cycles = run_gcd(sim, a, b)
+        @test result == gcd(a, b)
+        sample!(cg; a, b, equal = a == b, cycles)
+    end
+end
+coverage(cg)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">0.15</code></pre><p>Uniformly random 16-bit numbers are almost always &quot;large&quot;, so 100 runs left most of the plan untested. Showing the group gives the details:</p><pre><code class="language-julia hljs">show(stdout, MIME&quot;text/plain&quot;(), cg)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">CoverGroup(gcd, 15.0% covered, 100 samples)
+  a: 20.0%
+    zero         0  ← not hit
+    one          0  ← not hit
+    small        0  ← not hit
+    medium       0  ← not hit
+    large      100
+  b: 20.0%
+    zero         0  ← not hit
+    one          0  ← not hit
+    small        0  ← not hit
+    medium       0  ← not hit
+    large      100
+  equal: 50.0%
+    true        0  ← not hit
+    false     100
+  cycles: 66.7%
+    fast         0  ← not hit
+    normal      61
+    slow        39
+  a × b: 1 of 25 combinations hit</code></pre><p><a href="../../api/#VeriJul.Coverage.uncovered"><code>uncovered</code></a> lists what&#39;s missing:</p><pre><code class="language-julia hljs">first(uncovered(cg), 8)</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">8-element Vector{String}:
+ &quot;a: zero&quot;
+ &quot;a: one&quot;
+ &quot;a: small&quot;
+ &quot;a: medium&quot;
+ &quot;b: zero&quot;
+ &quot;b: one&quot;
+ &quot;b: small&quot;
+ &quot;b: medium&quot;</code></pre><h2 id="Closing-the-gaps"><a class="docs-heading-anchor" href="#Closing-the-gaps">Closing the gaps</a><a id="Closing-the-gaps-1"></a><a class="docs-heading-anchor-permalink" href="#Closing-the-gaps" title="Permalink"></a></h2><p>Rather than more of the same, pick inputs that aim at what&#39;s missing. Choosing a bin first and then a value inside it spreads the tests across all the cases. Keep going until everything is covered, with a limit so the loop always ends:</p><pre><code class="language-julia hljs">pick_size(rng) = rand(rng, (0:0, 1:1, 2:15, 16:255, 256:65535))
+
+@testset &quot;coverage-driven gcd&quot; begin
+    n = 0
+    while coverage(cg) &lt; 1 &amp;&amp; n &lt; 5_000
+        a = rand(rng, pick_size(rng))
+        b = rand(rng) &lt; 0.1 ? a : rand(rng, pick_size(rng))     # sometimes equal
+        result, cycles = run_gcd(sim, a, b)
+        @test result == gcd(a, b)
+        sample!(cg; a, b, equal = a == b, cycles)
+        n += 1
+    end
+    @test coverage(cg) == 1
+end
+cg</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">CoverGroup(gcd, 100.0% covered, 159 samples)
+  a: 100.0%
+    zero        10
+    one         11
+    small       14
+    medium      14
+    large      110
+  b: 100.0%
+    zero         8
+    one         11
+    small       17
+    medium      13
+    large      110
+  equal: 100.0%
+    true        8
+    false     151
+  cycles: 100.0%
+    fast        25
+    normal      78
+    slow        56
+  a × b: 25 of 25 combinations hit</code></pre><p>Every bin and every size combination has now been tried at least once, and the design matched Julia&#39;s <code>gcd</code> on all of them.</p><p>Coverage goals belong in the test itself: a <code>@test coverage(cg) == 1</code> at the end fails the test run if a change to the stimulus quietly stops reaching a case.</p><p>Next: <a href="../build_and_clocks/#Build-options-and-multiple-clocks">Build options and multiple clocks</a>.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../internals/">« Internal signals</a><a class="docs-footer-nextpage" href="../build_and_clocks/">Build options and multiple clocks »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.20.0 on <span class="colophon-date" title="Monday 16 November 2026 06:38">Monday 16 November 2026</span>. Using Julia version 1.13.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
