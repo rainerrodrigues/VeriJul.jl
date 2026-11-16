@@ -74,7 +74,20 @@ function Test.record(ts::SimTestSet, res::Test.Error)
     return r
 end
 
-Test.finish(ts::SimTestSet) = ts
+# A plain `@testset` takes its type from the enclosing testset, so inside a
+# testbench it constructs `SimTestSet(desc; ...)`. Build the testset type the
+# testbench's own testset wraps, wrapped again so failures in the nested set
+# still get the simulation context.
+function SimTestSet(desc::AbstractString; kwargs...)
+    current = Test.get_testset()
+    current isa SimTestSet || return Test.DefaultTestSet(desc; kwargs...)
+    inner = typeof(current.parent)(desc; kwargs...)
+    return SimTestSet(inner, current.sim, current.testbench)
+end
+
+# Finishing a nested set finishes the wrapped one, which records itself into
+# the enclosing testset as usual. (The testbench's own wrapper is never finished.)
+Test.finish(ts::SimTestSet) = Test.finish(ts.parent)
 
 # The caller's testset stack (Julia < 1.13), or nothing.
 function capture_testsets()

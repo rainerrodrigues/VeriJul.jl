@@ -165,8 +165,9 @@ Things to keep in mind:
   results outside it.
 - Always `wait` (or `fetch`) the testbenches you launch. Otherwise an error
   in one of them goes unnoticed and the test set ends before they finish.
-- A `@testset` *inside* a testbench works, but failures recorded in it
-  don't get the simulation context.
+- A `@testset` *inside* a testbench groups its checks as usual: it is
+  recorded into the test set the testbench was launched from, and its
+  failures get the simulation context too.
 - Give every wait a `max_cycles` (or `timeout`), so a stuck design fails the
   test instead of hanging it.
 

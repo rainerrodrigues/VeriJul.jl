@@ -15,7 +15,13 @@ mutable struct Capture <: Test.AbstractTestSet
     Capture(desc; kwargs...) = new(desc, Any[])
 end
 Test.record(ts::Capture, r) = (push!(ts.results, r); r)
-Test.finish(ts::Capture) = ts
+function Test.finish(ts::Capture)
+    # A nested Capture records into its parent, but never into a DefaultTestSet,
+    # so the failures it keeps don't fail the suite
+    parent = Test.get_testset()
+    parent isa Union{Test.DefaultTestSet,Test.FallbackTestSet} || Test.record(parent, ts)
+    return ts
+end
 
 have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
 
@@ -469,6 +475,58 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         fail = ts.results[2]
         @test occursin("cycle 2, testbench `checker`", fail.context)
         @test occursin("simulation time 10", fail.context)   # first rising edge is at 0
+        stop_clock!(sim)
+    end
+
+    @testset "Nested @testset inside a testbench (mock design)" begin
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        @testbench function grouped(sim)
+            @tick sim
+            @testset "group" begin
+                @test true
+                @tick sim
+                @test sim.cycle == 1000              # fails
+                @testset "subgroup $i" for i in 1:2
+                    @test i > 0
+                end
+            end
+        end
+        start_clock!(sim)
+        ts = @testset Capture "captured" begin
+            t = launch_grouped(sim)
+            within(10) do
+                wait(t)
+            end
+        end
+        @test length(ts.results) == 1                # the nested set, recorded once
+        group = only(ts.results)
+        @test group isa Capture && group.description == "group"
+        kinds = map(typeof, group.results)
+        @test kinds == [Test.Pass, Test.Fail, Capture, Capture]
+        @test occursin("cycle 2, testbench `grouped`", group.results[2].context)
+        @test [r.description for r in group.results[3:4]] == ["subgroup 1", "subgroup 2"]
+        @test isempty(sim.participants)
+        stop_clock!(sim)
+
+        # The same with Julia's DefaultTestSet as the enclosing testset
+        sim = Simulator(MockDesign.make_dut())
+        @testbench function passes(sim)
+            @tick sim
+            @testset "inner" begin
+                @test sim.cycle == 1
+            end
+        end
+        start_clock!(sim)
+        inner = nothing
+        @testset "outer" begin
+            t = launch_passes(sim)
+            within(10) do
+                wait(t)
+            end
+            inner = Test.get_testset().results[end]
+        end
+        @test inner isa Test.DefaultTestSet && inner.description == "inner"
         stop_clock!(sim)
     end
 
