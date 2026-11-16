@@ -123,10 +123,8 @@ struct Signal
     writable::Bool        # false for parameters
 end
 
-# VPI object types (from vpi_user.h)
-const VPI_PARAMETER = 41
-const VPI_NET = 36
-const VPI_REG = 48
+# VPI object types of arrays and memories (from vpi_user.h)
+const VPI_ARRAY_TYPES = (29, 114, 116)   # vpiMemory, vpiNetArray, vpiRegArray
 
 function vpi_function(d::DUT, sym::Symbol)
     lib = model(d).lib_handle
@@ -173,10 +171,11 @@ function signal(d::DUT, name::AbstractString)
     h == C_NULL && error("Design `$(getfield(d, :top))` has no signal named `$name`. ",
                          "List them with signals(dut).")
     kind = ccall(vpi_function(d, :top_signal_type), Int32, (Ptr{Cvoid}, Ptr{Cvoid}), m.ptr, h)
-    kind in (VPI_REG, VPI_NET, VPI_PARAMETER) ||
+    kind in VPI_ARRAY_TYPES &&
         error("`$name` is an array or memory, not a single signal; its elements can't be accessed yet")
     width = ccall(vpi_function(d, :top_signal_width), Int32, (Ptr{Cvoid}, Ptr{Cvoid}), m.ptr, h)
-    return Signal(d, String(name), h, Int(width), kind != VPI_PARAMETER)
+    writable = ccall(vpi_function(d, :top_signal_writable), Int32, (Ptr{Cvoid}, Ptr{Cvoid}), m.ptr, h) != 0
+    return Signal(d, String(name), h, Int(width), writable)
 end
 
 """
@@ -208,7 +207,7 @@ function Base.getindex(s::Signal)
 end
 
 function Base.setindex!(s::Signal, val::Integer)
-    s.writable || error("`$(s.name)` is a parameter and can't be written")
+    s.writable || error("`$(s.name)` is a parameter or constant and can't be written")
     m = check_alive(model(s.dut))
     buf = int_to_words(val, s.width)
     err = ccall(vpi_function(s.dut, :top_signal_write), Int32,

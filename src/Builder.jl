@@ -23,7 +23,7 @@ end
 const MIN_VERILATOR = v"4.200"
 
 # Bump when the generated C++ changes, so cached builds are invalidated.
-const WRAPPER_VERSION = 5
+const WRAPPER_VERSION = 6
 
 """
     verilator_cmd() -> Cmd
@@ -105,7 +105,8 @@ Every port gets a getter; input ports also get a setter. With
 `internals=true` the shim also exposes internal signals through Verilator's
 VPI (the design must be Verilated with `--vpi --public-flat-rw`).
 """
-function generate_bindings(ports::Vector{HardwarePort}, module_name::String; internals::Bool=false)
+function generate_bindings(ports::Vector{HardwarePort}, module_name::String; internals::Bool=false,
+                           constants::Vector{String}=String[])
     V = "V$(module_name)"
 
     cpp_code = """
@@ -193,11 +194,33 @@ function generate_bindings(ports::Vector{HardwarePort}, module_name::String; int
             (jl_code *= "set_$(n)!(model::VerilatedModel, val::Integer) = Interop.write_port(Libdl.dlsym(model.lib_handle, :set_$n), model, $w, val)\n")
     end
 
-    internals && (cpp_code *= INTERNALS_CPP)
+    if internals
+        # Signals stored as C++ constants (parameters): writing them would
+        # write to read-only memory, and not every Verilator version's VPI
+        # reports them as parameters
+        list = join(["        \"$c\",\n" for c in constants])
+        cpp_code *= "\n    static const char* const verijul_constants[] = {\n$(list)        nullptr\n    };\n"
+        cpp_code *= INTERNALS_CPP
+    end
     cpp_code *= "}\n"
     jl_code *= "end\n"
 
     return cpp_code, jl_code
+end
+
+# Full VPI names ("TOP.top.u_sub.P") of the signals Verilator emitted as C++
+# constants, e.g. `static const ::IData/*31:0*/ top__DOT__u_sub__DOT__P;`.
+const CONSTANT_DECL = r"^\s*static\s+(?:constexpr|const)\b[^;]*?(\w+__DOT__\w+)\s*(?:=[^;]*)?;"m
+
+function extract_constants(build_dir::AbstractString, top_module::AbstractString)
+    names = String[]
+    for f in readdir(build_dir)
+        (startswith(f, "V$(top_module)") && endswith(f, ".h")) || continue
+        for m in eachmatch(CONSTANT_DECL, read(joinpath(build_dir, f), String))
+            push!(names, "TOP." * replace(m[1], "__DOT__" => "."))
+        end
+    end
+    return unique!(sort!(names))
 end
 
 # C functions for internal signal access through VPI. Every call first makes
@@ -236,6 +259,18 @@ const INTERNALS_CPP = raw"""
         return vpi_get(vpiType, static_cast<vpiHandle>(sig));
     }
 
+    // 1 if the signal may be written: not a parameter or other constant
+    int32_t top_signal_writable(Handle* h, void* sig) {
+        Verilated::threadContextp(h->ctx);
+        vpiHandle s = static_cast<vpiHandle>(sig);
+        if (vpi_get(vpiType, s) == vpiParameter) return 0;
+        const char* name = vpi_get_str(vpiFullName, s);
+        if (!name) return 0;
+        for (const char* const* c = verijul_constants; *c; ++c)
+            if (std::strcmp(*c, name) == 0) return 0;
+        return 1;
+    }
+
     int32_t top_signal_width(Handle* h, void* sig) {
         Verilated::threadContextp(h->ctx);
         return vpi_get(vpiSize, static_cast<vpiHandle>(sig));
@@ -252,8 +287,8 @@ const INTERNALS_CPP = raw"""
     // Returns 0 on success, or the VPI error level
     int32_t top_signal_write(Handle* h, void* sig, const uint32_t* in, int32_t nwords) {
         Verilated::threadContextp(h->ctx);
-        // Parameters may live in read-only memory; some Verilator versions write anyway
-        if (vpi_get(vpiType, static_cast<vpiHandle>(sig)) == vpiParameter) return vpiError;
+        // Constants live in read-only memory; some Verilator versions write anyway
+        if (!top_signal_writable(h, sig)) return vpiError;
         std::vector<s_vpi_vecval> vec(nwords);
         for (int32_t i = 0; i < nwords; i++) { vec[i].aval = in[i]; vec[i].bval = 0; }
         s_vpi_value v;
@@ -459,7 +494,8 @@ function compile_design(build_dir, key, srcs, top_module, incs, defines, paramet
     ports = extract_ports(joinpath(build_dir, "V$(top_module).h"))
     # VPI access is compiled in whenever the design is Verilated with --vpi
     internals = "--vpi" in args
-    cpp_code, jl_code = generate_bindings(ports, top_module; internals=internals)
+    constants = internals ? extract_constants(build_dir, top_module) : String[]
+    cpp_code, jl_code = generate_bindings(ports, top_module; internals=internals, constants=constants)
 
     wrapper_path = joinpath(build_dir, "wrapper.cpp")
     write(wrapper_path, cpp_code)

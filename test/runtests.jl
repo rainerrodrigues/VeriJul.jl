@@ -689,8 +689,23 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         @test err isa ErrorException && occursin("internals=true", err.msg)
         @test_throws ErrorException dut["count"]
         @test_throws ErrorException signals(dut)
-        cpp, _ = generate_bindings([HardwarePort("clk", :in, 1)], "top"; internals=true)
+        cpp, _ = generate_bindings([HardwarePort("clk", :in, 1)], "top"; internals=true,
+                                   constants=["TOP.top.P"])
         @test occursin("top_signal_read", cpp) && occursin("verilated_vpi.h", cpp)
+        @test occursin("\"TOP.top.P\",", cpp)
+
+        # Constants are found in the generated headers, whatever VPI says about them
+        dir = mktempdir()
+        write(joinpath(dir, "Vtop___024root.h"), """
+            class Vtop___024root {
+                static const ::IData/*31:0*/ top__DOT__DEPTH;
+                static constexpr CData/*7:0*/ top__DOT__u_sub__DOT__MODE = 3U;
+                CData/*0:0*/ top__DOT__count;
+                static const int notASignal;
+            };
+            """)
+        write(joinpath(dir, "Other.h"), "static const IData top__DOT__IGNORED;")
+        @test VeriJul.Builder.extract_constants(dir, "top") == ["TOP.top.DEPTH", "TOP.top.u_sub.MODE"]
         cpp, _ = generate_bindings([HardwarePort("clk", :in, 1)], "top")
         @test !occursin("vpi", cpp)
     end
