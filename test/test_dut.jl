@@ -305,7 +305,13 @@ end
     @test dut.m_valid == 1
     reset!(sim)
     @test cnt[] == 0
-    @test_throws ErrorException signal(dut, "DEPTH")[] = 8        # parameters can't be written
+    depth = signal(dut, "DEPTH")
+    @test depth[] == 4                                            # parameters can be read
+    err = try depth[] = 8; nothing catch e; e end                 # but not written
+    @test err isa ErrorException && occursin("parameter", err.msg)
+    @test depth[] == 4
+    err = try signal(dut, "mem"); nothing catch e; e end
+    @test err isa ErrorException && occursin("array or memory", err.msg)
 
     stop_clock!(sim)
     destroy!(dut)

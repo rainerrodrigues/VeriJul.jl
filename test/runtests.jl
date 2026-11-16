@@ -529,6 +529,31 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         end
         @test inner isa Test.DefaultTestSet && inner.description == "inner"
         stop_clock!(sim)
+
+        # A child testbench (launched by a testbench) with its own nested @testset
+        sim = Simulator(MockDesign.make_dut())
+        @testbench function child_group(sim)
+            @tick sim
+            @testset "child group" begin
+                @test true
+                @test sim.cycle == 1000              # fails
+            end
+        end
+        @testbench function parent_tb(sim)
+            wait(launch_child_group(sim))
+        end
+        start_clock!(sim)
+        ts = @testset Capture "captured" begin
+            t = launch_parent_tb(sim)
+            within(10) do
+                wait(t)
+            end
+        end
+        group = only(ts.results)
+        @test group isa Capture && group.description == "child group"
+        @test map(typeof, group.results) == [Test.Pass, Test.Fail]
+        @test occursin("testbench `child_group`", group.results[2].context)
+        stop_clock!(sim)
     end
 
     @testset "A throwing testbench fails with TestbenchError (mock design)" begin
@@ -590,6 +615,12 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         @test bins(1:10, 3) == ["1:3" => 1:3, "4:6" => 4:6, "7:10" => 7:10]
         @test_throws ArgumentError bins(1:3, 5)
         @test_throws ArgumentError sample!(cg; a = 1)                  # `op` missing
+
+        # A rejected sample changes nothing
+        strict = CoverGroup("strict", :a => [1], :b => ["big" => x -> x > 0])
+        @test_throws ArgumentError sample!(strict; a = 1)
+        @test_throws MethodError sample!(strict; a = 1, b = "text")   # predicate throws
+        @test coverage(strict) == 0 && strict.samples == 0
         @test_throws ArgumentError CoverGroup("bad", :x => [])
         @test_throws ArgumentError CoverGroup("bad", :x => [1, 1])
         @test_throws ArgumentError CoverGroup("bad", :x => [1]; cross = [(:x, :y)])
@@ -620,6 +651,36 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         @test occursin("never seen: 30", sprint(show, MIME"text/plain"(), sb2))
         observe!(sb2, 30)
         @test passed(sb2)
+    end
+
+    @testset "Stream components (mock design)" begin
+        # `rst` serves as a valid signal without ready, `step` and `count` as data
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        start_clock!(sim)
+        bus = StreamBus(data=:step, valid=:rst)
+        @test_throws ArgumentError send!(sim, bus, [1]; idle=1.0)
+        @test_throws ArgumentError send!(sim, bus, [1]; idle=-0.1)
+        @test_throws ArgumentError receive!(sim, bus, 1; ready=0)
+        @test_throws ArgumentError receive!(sim, bus, 1; ready=1.5)
+        within(10) do
+            send!(sim, bus, [3, 4, 5])                   # no ready: one word per cycle
+            @test dut.rst == 0 && dut.step == 5
+        end
+
+        # A monitor whose callback fails reports it from stop!, even if it
+        # finished before stop! was called
+        mon = StreamMonitor(sim, StreamBus(data=:count, valid=:rst); on_item = x -> error("bad item"))
+        dut.rst = 1
+        within(10) do
+            @tick sim 3
+        end
+        @test istaskdone(mon.task)
+        err = try stop!(mon); nothing catch e; e end
+        @test err isa TaskFailedException
+        @test err.task.exception isa TestbenchError && err.task.exception.error.msg == "bad item"
+        dut.rst = 0
+        stop_clock!(sim)
     end
 
     @testset "Internal signals need internals=true (mock design)" begin

@@ -105,15 +105,16 @@ Records one sample: each named point's value is matched against its bins.
 Every point of the group must be given.
 """
 function sample!(cg::CoverGroup, values::NamedTuple)
+    # Match everything first, so a sample that throws (a missing point, a
+    # failing predicate) leaves the counts untouched
     matched = Dict{Symbol,Vector{Int}}()
     for p in cg.points
         haskey(values, p.name) || throw(ArgumentError("sample! is missing cover point `$(p.name)`"))
         x = values[p.name]
-        idx = [i for i in eachindex(p.matchers) if bin_matches(p.matchers[i], x)]
-        for i in idx
-            p.hits[i] += 1
-        end
-        matched[p.name] = idx
+        matched[p.name] = [i for i in eachindex(p.matchers) if bin_matches(p.matchers[i], x)]
+    end
+    for p in cg.points, i in matched[p.name]
+        p.hits[i] += 1
     end
     for c in cg.crosses
         for combo in Iterators.product((matched[n] for n in c.names)...)

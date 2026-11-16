@@ -120,7 +120,13 @@ struct Signal
     name::String          # as given, relative to the top module
     handle::Ptr{Cvoid}
     width::Int
+    writable::Bool        # false for parameters
 end
+
+# VPI object types (from vpi_user.h)
+const VPI_PARAMETER = 41
+const VPI_NET = 36
+const VPI_REG = 48
 
 function vpi_function(d::DUT, sym::Symbol)
     lib = model(d).lib_handle
@@ -152,7 +158,8 @@ occupancy[] = 0      # write
 
 `dut["count"]` and `dut["count"] = 0` are shorthand for one-off access;
 keep the `Signal` when reading the same signal often, since the lookup is
-the slow part.
+the slow part. Parameters can be read but not written; arrays and memories
+(`reg [7:0] mem [0:3]`) are listed by `signals` but can't be accessed yet.
 
 A write deposits a value: it holds until the design's own logic next
 assigns the signal (for a register, typically the next clock edge). Call
@@ -165,8 +172,11 @@ function signal(d::DUT, name::AbstractString)
     h = ccall(f, Ptr{Cvoid}, (Ptr{Cvoid}, Cstring), m.ptr, vpi_name(d, name))
     h == C_NULL && error("Design `$(getfield(d, :top))` has no signal named `$name`. ",
                          "List them with signals(dut).")
+    kind = ccall(vpi_function(d, :top_signal_type), Int32, (Ptr{Cvoid}, Ptr{Cvoid}), m.ptr, h)
+    kind in (VPI_REG, VPI_NET, VPI_PARAMETER) ||
+        error("`$name` is an array or memory, not a single signal; its elements can't be accessed yet")
     width = ccall(vpi_function(d, :top_signal_width), Int32, (Ptr{Cvoid}, Ptr{Cvoid}), m.ptr, h)
-    return Signal(d, String(name), h, Int(width))
+    return Signal(d, String(name), h, Int(width), kind != VPI_PARAMETER)
 end
 
 """
@@ -198,11 +208,12 @@ function Base.getindex(s::Signal)
 end
 
 function Base.setindex!(s::Signal, val::Integer)
+    s.writable || error("`$(s.name)` is a parameter and can't be written")
     m = check_alive(model(s.dut))
     buf = int_to_words(val, s.width)
     err = ccall(vpi_function(s.dut, :top_signal_write), Int32,
                 (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{UInt32}, Int32), m.ptr, s.handle, buf, length(buf))
-    err == 0 || error("Could not write signal `$(s.name)` (it may be a parameter or constant)")
+    err == 0 || error("Could not write signal `$(s.name)`")
     return s
 end
 

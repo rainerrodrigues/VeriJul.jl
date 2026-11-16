@@ -58,8 +58,8 @@ Drives `items` into the design through `bus`, one word per handshake, and
 returns once the last one is accepted. Holds each word with `valid` high
 until the design is ready, and leaves `valid` low afterwards.
 
-`idle` is the probability of inserting an idle cycle (valid low) before
-each word, to test that the design copes with gaps. `max_cycles` limits how
+`idle` (from 0 up to, but not including, 1) is the probability of inserting
+an idle cycle (valid low) before each word, to test that the design copes with gaps. `max_cycles` limits how
 long one word may wait for `ready`; then a
 [`WaitTimeout`](@ref VeriJul.SimCore.WaitTimeout) is thrown.
 
@@ -68,6 +68,7 @@ main task) while the clock runs.
 """
 function send!(sim::Simulator, bus::StreamBus, items; idle::Real=0.0,
                rng::AbstractRNG=default_rng(), max_cycles::Union{Integer,Nothing}=nothing)
+    0 <= idle < 1 || throw(ArgumentError("idle must be in [0, 1), got $idle"))
     dut = the_dut(sim)
     align(sim, bus)
     try
@@ -99,8 +100,8 @@ end
     receive!(sim, bus, n; ready=1.0, rng=Random.default_rng(), max_cycles=nothing) -> Vector
 
 Receives `n` words from the design through `bus` and returns them. Drives
-the bus's `ready` input: with `ready < 1`, `ready` is high in each cycle
-only with that probability, to test that the design handles backpressure.
+the bus's `ready` input: with `ready < 1` (it must be above 0), `ready` is
+high in each cycle only with that probability, to test that the design handles backpressure.
 `ready` is left low afterwards.
 
 `max_cycles` limits how long to wait for each word; then a
@@ -108,6 +109,7 @@ only with that probability, to test that the design handles backpressure.
 """
 function receive!(sim::Simulator, bus::StreamBus, n::Integer; ready::Real=1.0,
                   rng::AbstractRNG=default_rng(), max_cycles::Union{Integer,Nothing}=nothing)
+    0 < ready <= 1 || throw(ArgumentError("ready must be in (0, 1], got $ready"))
     dut = the_dut(sim)
     items = Any[]
     align(sim, bus)
@@ -189,7 +191,7 @@ Stops the monitor after the current cycle and returns the words it saw.
 """
 function stop!(mon::StreamMonitor)
     mon.running = false
-    istaskdone(mon.task) || wait(mon.task)
+    wait(mon.task)              # also reports a monitor that already failed
     return mon.items
 end
 

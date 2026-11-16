@@ -23,7 +23,7 @@ end
 const MIN_VERILATOR = v"4.200"
 
 # Bump when the generated C++ changes, so cached builds are invalidated.
-const WRAPPER_VERSION = 4
+const WRAPPER_VERSION = 5
 
 """
     verilator_cmd() -> Cmd
@@ -231,6 +231,11 @@ const INTERNALS_CPP = raw"""
         return vpi_handle_by_name(const_cast<PLI_BYTE8*>(name), nullptr);
     }
 
+    int32_t top_signal_type(Handle* h, void* sig) {
+        Verilated::threadContextp(h->ctx);
+        return vpi_get(vpiType, static_cast<vpiHandle>(sig));
+    }
+
     int32_t top_signal_width(Handle* h, void* sig) {
         Verilated::threadContextp(h->ctx);
         return vpi_get(vpiSize, static_cast<vpiHandle>(sig));
@@ -247,6 +252,8 @@ const INTERNALS_CPP = raw"""
     // Returns 0 on success, or the VPI error level
     int32_t top_signal_write(Handle* h, void* sig, const uint32_t* in, int32_t nwords) {
         Verilated::threadContextp(h->ctx);
+        // Parameters may live in read-only memory; some Verilator versions write anyway
+        if (vpi_get(vpiType, static_cast<vpiHandle>(sig)) == vpiParameter) return vpiError;
         std::vector<s_vpi_vecval> vec(nwords);
         for (int32_t i = 0; i < nwords; i++) { vec[i].aval = in[i]; vec[i].bval = 0; }
         s_vpi_value v;
