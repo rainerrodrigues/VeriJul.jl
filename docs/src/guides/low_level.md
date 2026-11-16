@@ -4,38 +4,55 @@ CurrentModule = VeriJul
 
 # Lower-level API
 
-[`load_dut`](@ref) and [`DUT`](@ref) cover most uses. Underneath them is a
-smaller interface that works on a bare [`VerilatedModel`](@ref) and a
-generated bindings file. It is useful when you want the build step and the
-loading step separate, or want to see exactly what VeriJul generates.
+[`load_dut`](@ref) builds a design and loads it in one step. The two steps
+are also available separately, for example to build once in a setup script
+and load the library in several processes:
 
-| With `load_dut` | Lower-level equivalent |
-|---|---|
-| `dut = load_dut(src, "top")` | `lib, b = build_dut(src, "top"); include(b); using .AutoBindings; m = VerilatedModel(lib)` |
-| `dut.in_data = 0x42` | `AutoBindings.set_in_data!(m, 0x42)` |
-| `dut.out_data` | `AutoBindings.get_out_data(m)` |
-| `enable_trace!(dut, "w.vcd")` | `AutoBindings.enable_trace!(m, "w.vcd")` or `enable_trace!(m, "w.vcd")` |
-| `Simulator(dut)` | `Simulator(m)` |
+```julia
+lib = build_dut("filter.v", "filter")    # compile (cached); returns the library path
+dut = DUT(lib, "filter")                 # load it
+```
 
-[`build_dut`](@ref) returns the path of the compiled library and of the
-generated `bindings.jl`. That file defines a module called `AutoBindings` with
-a `get_<port>` function for every port and a `set_<port>!` function for every
-input. Values follow the same rules as `DUT` properties (see
-[Ports and wide signals](@ref)).
+[`build_dut`](@ref) takes the same keywords as `load_dut` and returns the
+path of the compiled shared library. `DUT(lib, top)` reads the port list
+from the Verilator header next to the library and loads it. Each `DUT` has
+its own copy of the model, so a library can be loaded any number of times.
 
-## Limits
+## What a build contains
 
-- Every design's generated module is called `AutoBindings`, so including the
-  bindings of a second design replaces the first. `load_dut` doesn't generate
-  a module, so any number of designs can be loaded at once.
-- Function lookups in `AutoBindings` happen on every call. `DUT` looks them
-  up once when the design is loaded.
+Each build directory holds the Verilator output, a generated C++ shim
+(`wrapper.cpp`) and the shared library. The shim gives the model a plain C
+interface:
+
+| C function | Used for |
+|:--|:--|
+| `top_create`, `top_destroy` | creating and freeing a model (each with its own `VerilatedContext`) |
+| `top_eval`, `top_settle` | evaluating, with and without a waveform sample |
+| `top_enable_trace`, `top_trace_format` | waveform output |
+| `get_<port>`, `set_<port>` | reading every port, writing inputs |
+| `top_signal…` | internal signals (only with `internals=true`) |
+
+[`generate_bindings`](@ref VeriJul.Builder.generate_bindings) shows the
+generated code for a list of ports.
+
+## The bare model
+
+[`VerilatedModel`](@ref) is the loaded library without named ports.
+[`Simulator`](@ref) works on one too, driving clocks through the library's
+`set_<clock>` functions, which is all that some tools built on VeriJul
+need:
+
+```julia
+m = VerilatedModel(lib)
+sim = Simulator(m)
+```
+
+`VeriJul.Device.model(dut)` returns a `DUT`'s model.
 
 ## Simulator fields
 
-`sim.rising_edge` and `sim.falling_edge` are the `Condition`s that the main
-clock notifies on each edge, and `sim.clk_val` is the main clock's current
-value. [`tick`](@ref) is usually more convenient than waiting on them
-directly. Waiting on them directly still keeps the clock in lockstep, but
-the clock only notices such waits by checking every 10 ms, so `tick` is
-also faster.
+`sim.rising_edge` and `sim.falling_edge` are events for the main clock:
+`wait(sim.rising_edge)` waits for the next rising edge, just like
+`tick(sim)`, and throws [`ClockStopped`](@ref) when the clock isn't
+running. `sim.clk_val` is the main clock's current value, `sim.time` the
+time of the last edge and `sim.cycle` the number of rising edges so far.

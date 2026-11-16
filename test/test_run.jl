@@ -1,49 +1,43 @@
-# Integration test: build filter.v with Verilator, then drive it from Julia.
-# Included from runtests.jl, so it runs inside a @testset at Main's top level.
+# Integration test: the lower-level API. Build filter.v with build_dut, load
+# the library with DUT(lib, top), and drive a Simulator built on the bare
+# VerilatedModel. Included from runtests.jl inside a @testset.
 
 project_root = dirname(@__DIR__)
 verilog_file = joinpath(project_root, "examples", "filter.v")
 build_dir = mktempdir()
 
-so_path, binding_path = VeriJul.Builder.build_dut(verilog_file, "filter"; build_dir=build_dir)
-@test isfile(so_path)
+lib = VeriJul.Builder.build_dut(verilog_file, "filter"; build_dir=build_dir)
+@test lib isa String && isfile(lib)
+@test VeriJul.Builder.build_dut(verilog_file, "filter"; build_dir=build_dir) == lib   # cached
 
-include(binding_path)
-using .AutoBindings
-
-dut = VerilatedModel(so_path, :top_create)
-sim = Simulator(dut)
+dut = DUT(lib, "filter")
+@test [p.name for p in ports(dut)] == ["clk", "in_data", "out_data"]
 vcd_path = joinpath(build_dir, "waveform.vcd")
-AutoBindings.enable_trace!(sim.dut, vcd_path)
+@test_throws ErrorException enable_trace!(dut, joinpath(build_dir, "waveform.fst"))  # built for VCD
+enable_trace!(dut, vcd_path)
+@test dut.out_data == 0x00
 
-@test AutoBindings.get_out_data(sim.dut) == 0x00
-
+# A Simulator on the bare model drives the clock through the library's setter
+sim = Simulator(VeriJul.Device.model(dut))
 start_clock!(sim)
 @test_throws ErrorException start_clock!(sim)   # double-start is rejected
 
 outputs = UInt8[]
-@sync @async begin
-    # Hold 0xFF long enough to fill the 4-tap pipeline plus the output register
-    AutoBindings.set_in_data!(sim.dut, 0xFF)
-    for _ in 1:6
-        @tick sim
-        push!(outputs, AutoBindings.get_out_data(sim.dut))
-    end
-    @test outputs[end] == 0xFF
-    @test issorted(outputs)          # moving average ramps up monotonically
-    @test any(<(0xFF), outputs)      # ...and isn't instantly at full scale
-
-    # Drain back to zero
-    AutoBindings.set_in_data!(sim.dut, 0)
-    for _ in 1:6
-        @tick sim
-    end
-    @test AutoBindings.get_out_data(sim.dut) == 0x00
+dut.in_data = 0xFF                 # hold long enough to fill the 4-tap pipeline and output register
+for _ in 1:6
+    @tick sim
+    push!(outputs, dut.out_data)
 end
+@test outputs[end] == 0xFF
+@test issorted(outputs)            # the moving average ramps up monotonically
+@test any(<(0xFF), outputs)        # ...and isn't instantly at full scale
+
+dut.in_data = 0
+@tick sim 6
+@test dut.out_data == 0x00
 
 stop_clock!(sim)
-@test sim.clock_task === nothing
-@test sim.time > 0
+@test sim.clock_task === nothing && sim.time > 0
 
 destroy!(dut)
 @test isfile(vcd_path) && filesize(vcd_path) > 0

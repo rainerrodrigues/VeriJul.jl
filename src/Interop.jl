@@ -26,8 +26,7 @@ mutable struct VerilatedModel
 
         ptr = ccall(Libdl.dlsym(lib_handle, create_sym), Ptr{Cvoid}, ())
         eval_ptr = Libdl.dlsym(lib_handle, :top_eval)
-        # Libraries from earlier development builds lack top_settle; fall back to top_eval
-        settle_ptr = something(Libdl.dlsym(lib_handle, :top_settle; throw_error=false), C_NULL)
+        settle_ptr = Libdl.dlsym(lib_handle, :top_settle)
 
         model = new(ptr, lib_handle, eval_ptr, settle_ptr)
         finalizer(destroy!, model)
@@ -64,22 +63,24 @@ outputs reflect inputs you just set. Useful for designs without a clock.
 """
 function settle!(model::VerilatedModel)
     check_alive(model)
-    if model.settle_ptr == C_NULL
-        ccall(model.eval_ptr, Cvoid, (Ptr{Cvoid}, UInt64), model.ptr, UInt64(0))
-    else
-        ccall(model.settle_ptr, Cvoid, (Ptr{Cvoid},), model.ptr)
-    end
+    ccall(model.settle_ptr, Cvoid, (Ptr{Cvoid},), model.ptr)
     return model
 end
 
 """
     enable_trace!(model, filename)
 
-Starts writing a VCD waveform to `filename`. The file is flushed and closed
-by [`destroy!`](@ref VeriJul.Interop.destroy!).
+Starts writing a waveform to `filename`: a VCD file, or an FST file if the
+design was built with `trace=:fst` (see [`build_dut`](@ref VeriJul.Builder.build_dut)).
+The file is flushed and closed by [`destroy!`](@ref VeriJul.Interop.destroy!).
 """
 function enable_trace!(model::VerilatedModel, filename::AbstractString)
     check_alive(model)
+    fmt = ccall(Libdl.dlsym(model.lib_handle, :top_trace_format), Int32, ()) == 1 ? ".fst" : ".vcd"
+    ext = lowercase(splitext(filename)[2])
+    ext in (".vcd", ".fst") && ext != fmt &&
+        error("This design writes $(fmt[2:end]) waveforms (build option trace=:$(fmt[2:end])), ",
+              "so `$filename` would get the wrong contents. Use a $fmt file name, or rebuild with trace=:$(ext[2:end]).")
     f = Libdl.dlsym(model.lib_handle, :top_enable_trace)
     ccall(f, Cvoid, (Ptr{Cvoid}, Cstring), model.ptr, filename)
     return model
@@ -103,7 +104,7 @@ function destroy!(model::VerilatedModel)
 end
 
 # ---------------------------------------------------------------------------
-# Port access shared by the DUT API and the generated AutoBindings
+# Port access for the DUT API
 
 nwords(width::Integer) = cld(width, 32)
 
@@ -124,23 +125,22 @@ end
 
 mask64(width::Integer) = width >= 64 ? typemax(UInt64) : (UInt64(1) << width) - 1
 
-# Call a generated `get_<port>` function. Ports up to 64 bits return the
-# matching unsigned integer type; wider ports return a `BigInt`.
-function read_port(fptr::Ptr{Cvoid}, model::VerilatedModel, width::Integer)
-    p = check_alive(model).ptr
-    if width <= 8
-        return ccall(fptr, UInt8, (Ptr{Cvoid},), p)
-    elseif width <= 16
-        return ccall(fptr, UInt16, (Ptr{Cvoid},), p)
-    elseif width <= 32
-        return ccall(fptr, UInt32, (Ptr{Cvoid},), p)
-    elseif width <= 64
-        return ccall(fptr, UInt64, (Ptr{Cvoid},), p)
-    else
-        buf = zeros(UInt32, nwords(width))
-        ccall(fptr, Cvoid, (Ptr{Cvoid}, Ptr{UInt32}), p, buf)
-        return words_to_int(buf)
-    end
+# The Julia type of a port's value: the smallest unsigned type that holds
+# `width` bits, or BigInt above 64 bits.
+port_type(width::Integer) = width <= 8 ? UInt8 : width <= 16 ? UInt16 :
+                            width <= 32 ? UInt32 : width <= 64 ? UInt64 : BigInt
+
+# Call a generated `get_<port>` function; `T` is `port_type(width)`.
+# (ccall needs a concrete return type, hence one method per type)
+for T in (UInt8, UInt16, UInt32, UInt64)
+    @eval read_port(::Type{$T}, fptr::Ptr{Cvoid}, model::VerilatedModel, width::Integer) =
+        ccall(fptr, $T, (Ptr{Cvoid},), check_alive(model).ptr)
+end
+
+function read_port(::Type{BigInt}, fptr::Ptr{Cvoid}, model::VerilatedModel, width::Integer)
+    buf = zeros(UInt32, nwords(width))
+    ccall(fptr, Cvoid, (Ptr{Cvoid}, Ptr{UInt32}), check_alive(model).ptr, buf)
+    return words_to_int(buf)
 end
 
 # Call a generated `set_<port>` function. `val` is truncated to `width` bits,

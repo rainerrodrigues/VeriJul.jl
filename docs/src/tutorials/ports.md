@@ -87,6 +87,5 @@ nothing # hide
 
 ## Lower-level access
 
-[`build_dut`](@ref) returns the library path and a generated `bindings.jl`
-with one function per port (`set_<port>!`, `get_<port>`) operating on a
-[`VerilatedModel`](@ref). See [Lower-level API](@ref).
+[`build_dut`](@ref) builds without loading and returns the library's path;
+`DUT(lib, top)` loads it. See [Lower-level API](@ref).

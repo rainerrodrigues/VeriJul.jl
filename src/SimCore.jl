@@ -6,7 +6,7 @@ using ..Interop: VerilatedModel
 using ..Device: Device, DUT
 
 export Simulator, start_clock!, stop_clock!, add_clock!, tick, reset!,
-       wait_until, wait_edge, ClockStopped, TickTimeout, WaitTimeout, TestbenchError
+       wait_until, wait_edge, run!, ClockStopped, TickTimeout, WaitTimeout, TestbenchError
 
 """
     ClockStopped()
@@ -64,7 +64,7 @@ mutable struct Clock
 end
 
 """
-    Simulator(dut; clock=:clk, half_period=5)
+    Simulator(dut; clock=:clk, half_period=5, stop_on_error=true)
 
 Simulation state for a [`DUT`](@ref VeriJul.Device.DUT) (or a bare
 [`VerilatedModel`](@ref VeriJul.Interop.VerilatedModel)): the current time and
@@ -82,6 +82,11 @@ while testbench code is waiting in [`tick`](@ref VeriJul.SimCore.tick), so
 printing, sleeping or any other I/O between ticks never skips an edge. Run
 concurrent testbenches with [`@testbench`](@ref VeriJul.DSL.@testbench) so
 the clock waits for all of them.
+
+If a `@testbench` task throws, the clock stops and every task waiting on it
+gets that [`TestbenchError`](@ref VeriJul.SimCore.TestbenchError), so the
+failure reaches the caller instead of leaving tasks hanging. Pass
+`stop_on_error=false` to keep the clock running instead.
 """
 mutable struct Simulator
     dut::Union{DUT,VerilatedModel}
@@ -95,6 +100,10 @@ mutable struct Simulator
     ready::Condition          # notified when a task starts waiting or a testbench ends
     cycle::Int64              # rising edges of the main clock so far
     evaluated::Condition      # notified after every evaluation (any clock edge)
+    stop_on_error::Bool       # a failing testbench stops the clock
+    failure::Union{Exception,Nothing}   # the testbench error that stopped the clock
+    hooks::Vector{Any}        # e.g. WaveRecorders, called after every evaluation
+    toggled::Vector{Clock}    # clocks that changed at the last edge
 end
 
 model_of(m::VerilatedModel) = m
@@ -119,17 +128,18 @@ function input_setter(::VerilatedModel, model::VerilatedModel, name::Symbol, wha
     return f
 end
 
-function Simulator(dut::Union{DUT,VerilatedModel}; clock::Symbol=:clk, half_period::Integer=5)
+function Simulator(dut::Union{DUT,VerilatedModel}; clock::Symbol=:clk, half_period::Integer=5,
+                   stop_on_error::Bool=true)
     sim = Simulator(dut, model_of(dut), 0, Clock[], nothing, false, false, Set{Task}(), Condition(),
-                    0, Condition())
+                    0, Condition(), stop_on_error, nothing, Any[], Clock[])
     add_clock!(sim, clock; half_period=half_period)
     return sim
 end
 
 # Main-clock fields for the lower-level API: rising_edge, falling_edge, clk_val
 function Base.getproperty(sim::Simulator, s::Symbol)
-    s === :rising_edge  && return getfield(sim, :clocks)[1].rising
-    s === :falling_edge && return getfield(sim, :clocks)[1].falling
+    s === :rising_edge  && return EdgeEvent(sim, getfield(sim, :clocks)[1].rising)
+    s === :falling_edge && return EdgeEvent(sim, getfield(sim, :clocks)[1].falling)
     s === :clk_val      && return getfield(sim, :clocks)[1].value
     return getfield(sim, s)
 end
@@ -165,159 +175,6 @@ function find_clock(sim::Simulator, name::Union{Symbol,Nothing})
     return sim.clocks[i]
 end
 
-# Tasks currently waiting for an edge of any clock.
-function waiting_tasks(sim::Simulator)
-    waiting = Set{Task}()
-    for c in sim.clocks
-        union!(waiting, c.rising.waitq)
-        union!(waiting, c.falling.waitq)
-    end
-    union!(waiting, sim.evaluated.waitq)
-    return waiting
-end
-
-# Testbenches blocked in wait/fetch on another testbench (e.g. a parent
-# waiting for a child it launched). They aren't busy, so they mustn't hold
-# the clock back; the child's own state decides instead.
-function waiting_on_testbenches(sim::Simulator)
-    waiting = Set{Task}()
-    for t in sim.participants
-        done = getfield(t, :donenotify)
-        done isa Base.GenericCondition && union!(waiting, done.waitq)
-    end
-    return waiting
-end
-
-# The next edge may happen once someone is waiting for an edge and no
-# registered testbench is still busy between two ticks.
-function can_advance(sim::Simulator)
-    on_edge = waiting_tasks(sim)
-    isempty(on_edge) && return false
-    on_child = waiting_on_testbenches(sim)
-    return all(t -> t in on_edge || t in on_child || istaskdone(t), sim.participants)
-end
-
-function wait_until_ready(sim::Simulator)
-    while sim.running && !can_advance(sim)
-        # Explicit notifications cover tick() and @testbench tasks; the timer
-        # also catches tasks that wait on the edge Conditions directly.
-        timer = Timer(_ -> notify(sim.ready), 0.01)
-        try
-            wait(sim.ready)
-        finally
-            close(timer)
-        end
-    end
-end
-
-"""
-    launch(f, sim, args...; kwargs...) -> Task
-
-Runs `f(sim, args...; kwargs...)` as a testbench task that the clock waits for: no edge happens
-while it is busy between two ticks. [`@testbench`](@ref VeriJul.DSL.@testbench)
-launchers use this.
-
-The task records `@test` results into the `@testset` that was active when it
-was launched, adding the simulation time and cycle to every failure. If `f`
-throws, the task fails with a [`TestbenchError`](@ref VeriJul.SimCore.TestbenchError)
-saying when.
-"""
-function launch(f, sim::Simulator, args...; kwargs...)
-    name = Symbol(nameof(f))
-    parent = capture_testsets()
-    task = @task try
-        with_sim_testset(parent, sim, name) do
-            f(sim, args...; kwargs...)
-        end
-    catch err
-        throw(testbench_error(err, catch_backtrace(), sim, name))
-    finally
-        delete!(sim.participants, current_task())
-        notify(sim.ready)
-    end
-    push!(sim.participants, task)
-    schedule(task)
-    return task
-end
-
-function wake_all(sim::Simulator, err)
-    for c in sim.clocks
-        notify(c.rising, err; error=true)
-        notify(c.falling, err; error=true)
-    end
-    notify(sim.evaluated, err; error=true)
-end
-
-"""
-    start_clock!(sim[, half_period]) -> Task
-
-Starts the clocks in a background task. Whenever the testbench is waiting
-in [`tick`](@ref VeriJul.SimCore.tick), it toggles the clocks due at the
-earliest time, evaluates the design (writing a waveform sample if tracing is
-on) and wakes the waiting tasks. Simulated time does not advance while the
-testbench is busy, so no edge is ever skipped.
-
-Passing `half_period` changes the main clock's half period.
-Throws if the clock is already running.
-"""
-function start_clock!(sim::Simulator, half_period::Union{Integer,Nothing}=nothing)
-    sim.running && error("Clock is already running; call stop_clock!(sim) first")
-    half_period === nothing || (sim.clocks[1].half_period = half_period)
-    sim.running = true
-
-    sim.clock_task = @async try
-        toggled = Clock[]
-        while sim.running
-            wait_until_ready(sim)
-            sim.running || break
-            t = minimum(c.next_toggle for c in sim.clocks)
-            sim.time = t
-            empty!(toggled)
-            for c in sim.clocks
-                if c.next_toggle == t
-                    c.value ⊻= 0x01
-                    ccall(c.set_ptr, Cvoid, (Ptr{Cvoid}, UInt8), sim.model.ptr, c.value)
-                    c.next_toggle += c.half_period
-                    push!(toggled, c)
-                end
-            end
-            Interop.eval_step!(sim.model, t)
-            sim.started = true
-            main = sim.clocks[1]
-            any(c -> c === main, toggled) && main.value == 0x01 && (sim.cycle += 1)
-            for c in toggled
-                notify(c.value == 0x01 ? c.rising : c.falling)
-            end
-            notify(sim.evaluated)
-            yield()
-        end
-    catch err
-        # Never leave testbenches waiting on a clock that has died
-        sim.running = false
-        wake_all(sim, err)
-        rethrow()
-    end
-    return sim.clock_task
-end
-
-"""
-    stop_clock!(sim)
-
-Stops the clocks and waits for the background task to finish. Tasks still
-waiting in [`tick`](@ref VeriJul.SimCore.tick) get a
-[`ClockStopped`](@ref VeriJul.SimCore.ClockStopped) error instead of hanging.
-Call this before `destroy!`-ing the design.
-"""
-function stop_clock!(sim::Simulator)
-    sim.running = false
-    notify(sim.ready)
-    t = sim.clock_task
-    t === nothing || wait(t)
-    sim.clock_task = nothing
-    wake_all(sim, ClockStopped("the simulator clock was stopped"))
-    return nothing
-end
-
 """
     tick(sim, n=1; clock=nothing, edge=:rising, timeout=nothing)
 
@@ -346,13 +203,6 @@ function tick(sim::Simulator, n::Integer=1; clock::Union{Symbol,Nothing}=nothing
         end
     end
     return sim
-end
-
-# Wait on one of the simulator's Conditions, letting the clock run meanwhile.
-function wait_for(sim::Simulator, cond::Condition)
-    sim.running || throw(ClockStopped())
-    notify(sim.ready)   # the clock runs once this task is waiting
-    return wait(cond)
 end
 
 # Run `f()`, interrupting it with a TickTimeout after `timeout` wall-clock seconds.
@@ -486,6 +336,7 @@ function reset!(sim::Simulator, port::Symbol=:rst; cycles::Integer=2, active_hig
     return sim
 end
 
+include("scheduler.jl")
 include("testsets.jl")
 
 end

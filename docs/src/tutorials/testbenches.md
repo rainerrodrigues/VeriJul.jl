@@ -61,7 +61,9 @@ for example a driver and a monitor.
 The clock waits for every launched testbench: no edge happens while any of
 them is busy between two ticks, so both see every edge even if one of them
 prints or sleeps. A testbench that has finished no longer holds the clock
-back. Tasks started with plain `@async` aren't waited for, so launch
+back. Launch monitors and receivers before the drivers: at the REPL, each
+line runs on its own, and a driver launched first may already be a few
+cycles ahead when the next line launches the monitor. Tasks started with plain `@async` aren't waited for, so launch
 concurrent testbenches with `@testbench`.
 
 ```@example tb
@@ -89,7 +91,11 @@ fetch(m)
 
 `fetch` returns the monitor's result once it finishes. If a task throws, the
 error is rethrown by `wait`/`fetch`, wrapped in a [`TestbenchError`](@ref)
-that says when it happened, so failures are never silently lost. Extra
+that says when it happened, so failures are never silently lost. A failing
+testbench also stops the clock: every task still waiting on it, including
+your main task, gets that same error instead of hanging. Create the
+simulator with `Simulator(dut; stop_on_error=false)` to keep the clock
+running instead. Extra
 arguments to a launcher are passed on: `launch_driver(sim, data)` runs
 `driver(sim, data)`. [Testing with Test.jl](@ref) shows how `@test` works
 inside testbenches.

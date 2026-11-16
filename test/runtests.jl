@@ -72,9 +72,9 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
 
         # Only a complete build for the same key counts as cached
         @test cached_build(new, "abc") === nothing
-        write(joinpath(new, "libVx_1.so"), "x"); write(joinpath(new, "bindings.jl"), "")
+        write(joinpath(new, "libVx_1.so"), "x")
         write(joinpath(new, BUILD_RECORD), "abc\nlibVx_1.so\n")
-        @test cached_build(new, "abc") == (joinpath(new, "libVx_1.so"), joinpath(new, "bindings.jl"))
+        @test cached_build(new, "abc") == joinpath(new, "libVx_1.so")
         @test cached_build(new, "other") === nothing
         rm(joinpath(new, "libVx_1.so"))
         @test cached_build(new, "abc") === nothing
@@ -105,7 +105,7 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
     @testset "Binding generation" begin
         ports = [HardwarePort("clk", :in, 1), HardwarePort("word", :in, 16),
                  HardwarePort("wide", :out, 41), HardwarePort("huge", :in, 100)]
-        cpp, jl = generate_bindings(ports, "dut")
+        cpp = generate_bindings(ports, "dut")
         @test occursin("#include \"Vdut.h\"", cpp)
         @test occursin("void set_word(Handle* h, uint16_t val)", cpp)
         @test occursin("uint16_t get_word(Handle* h)", cpp)          # inputs are readable too
@@ -116,8 +116,11 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         @test occursin("void top_settle(Handle* h)", cpp)
         @test occursin("double sc_time_stamp()", cpp)
         @test occursin("new VerilatedContext", cpp)          # one context per model
-        @test Meta.parse(jl) isa Expr
-        @test occursin("set_huge!(model::VerilatedModel, val::Integer)", jl)
+        @test occursin("VerilatedVcdC* tfp", cpp) && occursin("top_trace_format() { return 0; }", cpp)
+        fst = generate_bindings(ports, "dut"; trace=:fst)
+        @test occursin("verilated_fst_c.h", fst) && occursin("VerilatedFstC* tfp", fst)
+        @test occursin("top_trace_format() { return 1; }", fst)
+        @test_throws ArgumentError generate_bindings(ports, "dut"; trace=:ghw)
     end
 
     @testset "Wide value conversion" begin
@@ -126,6 +129,35 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         @test words_to_int(int_to_words(x, 100)) == x
         @test words_to_int(int_to_words(-1, 100)) == big(2)^100 - 1   # two's complement
         @test words_to_int(int_to_words(big(2)^100, 100)) == 0       # truncated
+
+        # Property tests: random values of random widths survive a round trip,
+        # wrapped to the width like a Verilog assignment
+        rng = Random.Xoshiro(20261116)
+        for _ in 1:2000
+            w = rand(rng, (1:200..., 31, 32, 33, 63, 64, 65, 95, 96, 97, 127, 128, 129))
+            x = rand(rng, Bool) ? rand(rng, big(0):big(2)^(w + 8)) : -rand(rng, big(0):big(2)^(w + 8))
+            words = int_to_words(x, w)
+            @test length(words) == cld(w, 32)
+            @test words_to_int(words) == mod(x, big(2)^w)
+            @test words_to_int(words) < big(2)^w                  # no bits above the width
+        end
+    end
+
+    @testset "Wide ports round-trip random values (mock design)" begin
+        dut = MockDesign.make_dut()
+        rng = Random.Xoshiro(7)
+        mask = big(2)^100 - 1
+        for _ in 1:500
+            x = rand(rng, -big(2)^101:big(2)^101)
+            dut.wide_in = x
+            @test dut.wide_in == mod(x, big(2)^100)
+            @test dut.wide_out == ~mod(x, big(2)^100) & mask
+        end
+        for _ in 1:500                                      # narrow ports wrap the same way
+            x = rand(rng, -1000:1000)
+            dut.step = x
+            @test dut.step == mod(x, 256)
+        end
     end
 
     @testset "Macros" begin
@@ -362,6 +394,19 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         stop_clock!(sim)
     end
 
+    @testset "Type-stable port reads (mock design)" begin
+        dut = MockDesign.make_dut()
+        read_count(d) = d.count
+        read_slow(d) = d.slow_count
+        read_wide(d) = d.wide_out
+        @test (@inferred read_count(dut)) isa UInt8
+        @test (@inferred read_slow(dut)) isa UInt16
+        @test (@inferred read_wide(dut)) isa BigInt
+        @test VeriJul.Interop.port_type.((1, 8, 9, 16, 17, 32, 33, 64, 65)) ==
+              (UInt8, UInt8, UInt16, UInt16, UInt32, UInt32, UInt64, UInt64, BigInt)
+        @test getfield(dut, :handles) isa NamedTuple
+    end
+
     @testset "wait_until and @wait_until (mock design)" begin
         dut = MockDesign.make_dut()
         sim = Simulator(dut)
@@ -579,12 +624,212 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         @test occursin("testbench `crashes` failed at simulation time 10 (cycle 2)", msg)
         @test occursin("boom", msg)
 
+        @test !sim.running && sim.failure === tb               # the failure stopped the clock
+
         # A parent passes its child's error on instead of wrapping it again
+        start_clock!(sim)
+        @test sim.failure === nothing
         err = within(10) do
             try wait(launch_waits_for_crash(sim)); nothing catch e; e end
         end
         @test err.task.exception isa TestbenchError && err.task.exception.testbench == :crashes
         @test isempty(sim.participants)
+        stop_clock!(sim)
+    end
+
+    @testset "Scheduler rules (mock design)" begin
+        S = VeriJul.SimCore
+        sim = Simulator(MockDesign.make_dut())
+        @test !S.can_advance(sim)                            # nobody waiting for an edge
+        gate = Channel{Nothing}(1)
+        @testbench function busy_then_ticks(sim, gate)
+            take!(gate)                                      # busy (blocked on a channel)
+            @tick sim
+        end
+        start_clock!(sim)
+        t = launch_busy_then_ticks(sim, gate)
+        main = @async tick(sim)                              # someone is waiting...
+        yield(); yield()
+        @test S.anyone_waiting(sim)
+        @test S.busy(sim, t) && !S.can_advance(sim)          # ...but a testbench is busy
+        sleep(0.05)
+        @test sim.cycle == 0 && !sim.started                 # so time stands still
+        put!(gate, nothing)
+        within(10) do
+            wait(t); wait(main)
+        end
+        @test sim.cycle >= 1 && isempty(sim.participants)
+
+        # A testbench blocked on a child testbench doesn't hold the clock back
+        @testbench child(sim) = @tick sim 2
+        @testbench function parent(sim)
+            c = launch_child(sim)
+            yield()                                          # let the child start waiting
+            wait(c)
+        end
+        p = launch_parent(sim)
+        within(10) do
+            wait(p)
+        end
+        @test istaskdone(p) && !istaskfailed(p)
+
+        # sim.rising_edge waits like tick and reports a stopped clock
+        within(10) do
+            c0 = sim.cycle
+            wait(sim.rising_edge)
+            @test sim.cycle == c0 + 1
+        end
+        stop_clock!(sim)
+        @test_throws ClockStopped wait(sim.rising_edge)
+    end
+
+    @testset "A failing testbench stops the clock and reaches everyone (mock design)" begin
+        sim = Simulator(MockDesign.make_dut())
+        @testbench function fails_at_cycle_3(sim)
+            @tick sim 3
+            error("broken")
+        end
+        @testbench waits_forever(sim) = @tick sim 10^9
+        @testbench function waits_on_edge_directly(sim)
+            wait(sim.rising_edge)
+            while true; wait(sim.falling_edge); end
+        end
+        start_clock!(sim)
+        others = [launch_waits_forever(sim), launch_waits_on_edge_directly(sim)]
+        f = launch_fails_at_cycle_3(sim)
+        # The main task, waiting in tick, gets the testbench's error with its time
+        err = within(10) do
+            try tick(sim, 10^9); nothing catch e; e end
+        end
+        @test err isa TestbenchError && err.testbench == :fails_at_cycle_3 && err.cycle == 3
+        within(10) do
+            for t in [f; others]
+                @test (try wait(t); false catch e; e.task.exception === err end)
+            end
+        end
+        @test isempty(sim.participants)                       # nothing left hanging
+        @test_throws TestbenchError tick(sim)                 # later waits report it too
+        stop_clock!(sim)
+
+        # With stop_on_error=false the clock keeps going for the others
+        sim = Simulator(MockDesign.make_dut(); stop_on_error=false)
+        start_clock!(sim)
+        f = launch_fails_at_cycle_3(sim)
+        within(10) do
+            tick(sim, 6)
+            @test istaskfailed(f) && sim.running && sim.failure === nothing
+        end
+        stop_clock!(sim)
+    end
+
+    @testset "run! (mock design)" begin
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        add_clock!(sim, :clk_slow; half_period=15)
+        dut.step = 2
+        cycles = Int[]
+        run!(sim, 5) do cycle
+            push!(cycles, cycle)
+        end
+        @test cycles == 1:5 && sim.cycle == 5 && dut.count == 10
+        @test dut.slow_count == 2                             # the other clock kept its own timeline
+        run!(sim, 3)
+        @test sim.cycle == 8 && dut.count == 16
+        @test dut.slow_count == 3                             # its rising edges: 0, 30, 60
+        run!(sim, 2; clock=:clk_slow)
+        @test dut.slow_count == 5 && sim.time == 120
+        @test_throws ArgumentError run!(sim, -1)
+        start_clock!(sim)
+        @test_throws ErrorException run!(sim, 1)               # not while the clock task runs
+        stop_clock!(sim)
+        err = try run!(c -> c == 2 && error("stop here"), sim, 5); nothing catch e; e end
+        @test err isa ErrorException && err.msg == "stop here"  # errors propagate directly
+    end
+
+    @testset "WaveRecorder (mock design)" begin
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        rec = WaveRecorder(sim; cycles=10, signals=[:clk, :count, :wide_out])
+        dut.step = 1
+        run!(sim, 50)
+        @test sim.cycle == 50
+        @test all(>(40), rec.cycle_of) && length(rec.times) <= 21   # only the last 10 cycles
+        path = save_waves(rec, joinpath(mktempdir(), "w.vcd"))
+        vcd = read(path, String)
+        @test occursin("\$scope module mock \$end", vcd)
+        @test occursin("\$var wire 1 ! clk \$end", vcd)
+        @test occursin("\$var wire 8 \" count [7:0] \$end", vcd)
+        @test occursin("\$var wire 100 # wide_out [99:0] \$end", vcd)
+        @test occursin("\$dumpvars", vcd) && occursin("#490", vcd)   # the last edge
+        @test !occursin("#390\n", vcd)                                # older than the window
+        @test occursin("b110010 \"", vcd)                             # count reached 50
+        @test VeriJul.Waves.vcd_id(1) == "!" && VeriJul.Waves.vcd_id(94) == "~" &&
+              VeriJul.Waves.vcd_id(95) == "!!"
+        @test_throws ErrorException WaveRecorder(sim; signals=[:nope])
+        stop_recording!(rec)
+        n = length(rec.times)
+        run!(sim, 5)
+        @test length(rec.times) == n                                  # no longer recording
+
+        # Saved by itself when a check inside a testbench fails, or a testbench throws
+        dir = mktempdir()
+        sim = Simulator(MockDesign.make_dut())
+        rec = WaveRecorder(sim; cycles=5, dir=dir)
+        @testbench function checks(sim)
+            @tick sim 8
+            @test sim.cycle == 0                                      # fails
+            @tick sim 2
+            error("then crashes")
+        end
+        start_clock!(sim)
+        ts = redirect_stdout(devnull) do
+            @testset Capture "captured" begin
+                t = launch_checks(sim)
+                @test_logs (:info, r"Saved the last 5 cycles") (:info, r"Saved the last 5 cycles") match_mode=:any begin
+                    within(10) do
+                        try wait(t) catch end
+                    end
+                end
+            end
+        end
+        @test sort(readdir(dir)) == ["failure_1.vcd", "failure_2.vcd"]
+        @test occursin("#70", read(joinpath(dir, "failure_1.vcd"), String))   # cycle 8 at time 70
+        stop_clock!(sim)
+    end
+
+    @testset "Failure hooks never hide a failure (mock design)" begin
+        @testbench function fails_at_cycle_2(sim)
+            @tick sim 2
+            error("broken")
+        end
+        # A recorder that can't write its file: the failure still reaches the caller
+        blocker = tempname(); write(blocker, "a file, not a directory")
+        sim = Simulator(MockDesign.make_dut())
+        WaveRecorder(sim; cycles=5, dir=joinpath(blocker, "waves"))
+        start_clock!(sim)
+        # (launched inside @test_logs, so the testbench task logs to the test logger)
+        err = @test_logs (:error, r"hook failed") match_mode=:any begin
+            launch_fails_at_cycle_2(sim)
+            within(10) do
+                try tick(sim, 10^9); nothing catch e; e end
+            end
+        end
+        @test err isa TestbenchError && err.error.msg == "broken"
+        stop_clock!(sim)
+
+        # With stop_on_error=false the recorder still saves on a thrown error
+        dir = mktempdir()
+        sim = Simulator(MockDesign.make_dut(); stop_on_error=false)
+        WaveRecorder(sim; cycles=5, dir=dir)
+        start_clock!(sim)
+        @test_logs (:info, r"Saved the last 5 cycles") match_mode=:any begin
+            t = launch_fails_at_cycle_2(sim)
+            within(10) do
+                try wait(t) catch end
+                tick(sim, 2)
+            end
+        end
+        @test readdir(dir) == ["failure_1.vcd"] && sim.running
         stop_clock!(sim)
     end
 
@@ -673,9 +918,9 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         mon = StreamMonitor(sim, StreamBus(data=:count, valid=:rst); on_item = x -> error("bad item"))
         dut.rst = 1
         within(10) do
-            @tick sim 3
+            @test_throws TestbenchError @tick sim 3              # the failure stops the clock
         end
-        @test istaskdone(mon.task)
+        @test istaskdone(mon.task) && !sim.running
         err = try stop!(mon); nothing catch e; e end
         @test err isa TaskFailedException
         @test err.task.exception isa TestbenchError && err.task.exception.error.msg == "bad item"
@@ -689,7 +934,7 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         @test err isa ErrorException && occursin("internals=true", err.msg)
         @test_throws ErrorException dut["count"]
         @test_throws ErrorException signals(dut)
-        cpp, _ = generate_bindings([HardwarePort("clk", :in, 1)], "top"; internals=true,
+        cpp = generate_bindings([HardwarePort("clk", :in, 1)], "top"; internals=true,
                                    constants=["TOP.top.P"])
         @test occursin("top_signal_read", cpp) && occursin("verilated_vpi.h", cpp)
         @test occursin("\"TOP.top.P\",", cpp)
@@ -706,7 +951,7 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
             """)
         write(joinpath(dir, "Other.h"), "static const IData top__DOT__IGNORED;")
         @test VeriJul.Builder.extract_constants(dir, "top") == ["TOP.top.DEPTH", "TOP.top.u_sub.MODE"]
-        cpp, _ = generate_bindings([HardwarePort("clk", :in, 1)], "top")
+        cpp = generate_bindings([HardwarePort("clk", :in, 1)], "top")
         @test !occursin("vpi", cpp)
     end
 

@@ -78,7 +78,8 @@ dut.in_data
 
 ## Record a waveform
 
-Call [`enable_trace!`](@ref) before simulating to write a VCD file. Each
+Call [`enable_trace!`](@ref) before simulating to write a VCD file (or a
+smaller FST file, see [Waveforms](@ref)). Each
 clock edge adds a sample at `sim.time`. The file is flushed when the design
 is destroyed.
 

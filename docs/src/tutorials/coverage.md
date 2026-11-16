@@ -148,4 +148,4 @@ destroy!(dut) # hide
 nothing # hide
 ```
 
-Next: [Build options and multiple clocks](@ref).
+Next: [Waveforms](@ref).
