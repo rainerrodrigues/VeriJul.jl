@@ -1,6 +1,7 @@
 using Test
 using Aqua
 using VeriJul
+using Random
 using VeriJul.Builder: extract_ports, generate_bindings, verilator_version, verilator_cmd,
                        prepare_build_dir, claim_build_dir, clear_build_dir, cached_build,
                        cxx_cmd, build_cache, clear_build_cache, BUILD_MARKER, BUILD_LOCK, BUILD_RECORD
@@ -528,6 +529,31 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         end
         @test inner isa Test.DefaultTestSet && inner.description == "inner"
         stop_clock!(sim)
+
+        # A child testbench (launched by a testbench) with its own nested @testset
+        sim = Simulator(MockDesign.make_dut())
+        @testbench function child_group(sim)
+            @tick sim
+            @testset "child group" begin
+                @test true
+                @test sim.cycle == 1000              # fails
+            end
+        end
+        @testbench function parent_tb(sim)
+            wait(launch_child_group(sim))
+        end
+        start_clock!(sim)
+        ts = @testset Capture "captured" begin
+            t = launch_parent_tb(sim)
+            within(10) do
+                wait(t)
+            end
+        end
+        group = only(ts.results)
+        @test group isa Capture && group.description == "child group"
+        @test map(typeof, group.results) == [Test.Pass, Test.Fail]
+        @test occursin("testbench `child_group`", group.results[2].context)
+        stop_clock!(sim)
     end
 
     @testset "A throwing testbench fails with TestbenchError (mock design)" begin
@@ -560,6 +586,128 @@ have_toolchain() = (try verilator_cmd(); cxx_cmd(); true catch; false end)
         @test err.task.exception isa TestbenchError && err.task.exception.testbench == :crashes
         @test isempty(sim.participants)
         stop_clock!(sim)
+    end
+
+    @testset "Coverage" begin
+        cg = CoverGroup("inputs",
+            :a => ["zero" => 0, "small" => 1:15, "large" => x -> x >= 16],
+            :op => [:add, :sub];
+            cross = [(:a, :op)])
+        @test coverage(cg) == 0 && length(uncovered(cg)) == 3 + 2 + 6
+        sample!(cg; a = 0, op = :add)
+        sample!(cg, (a = 300, op = :sub))
+        @test coverage(cg, :a) ≈ 2 / 3 && coverage(cg, :op) == 1
+        @test coverage(cg) ≈ (2 + 2 + 2) / 11
+        @test "a: small" in uncovered(cg) && "a × op: (small, :add)" in uncovered(cg)
+        for a in (0, 5, 20), op in (:add, :sub)
+            sample!(cg; a, op)
+        end
+        @test coverage(cg) == 1 && isempty(uncovered(cg)) && cg.samples == 8
+        report = sprint(show, MIME"text/plain"(), cg)
+        @test occursin("100.0% covered, 8 samples", report) && occursin("6 of 6 combinations", report)
+
+        # A value can fall into several bins; all of them count
+        overlap = CoverGroup("overlap", :x => ["low" => 0:10, "even" => iseven])
+        sample!(overlap; x = 4)
+        @test coverage(overlap) == 1
+
+        @test bins(0:255, 4) == ["0:63" => 0:63, "64:127" => 64:127, "128:191" => 128:191, "192:255" => 192:255]
+        @test bins(1:10, 3) == ["1:3" => 1:3, "4:6" => 4:6, "7:10" => 7:10]
+        @test_throws ArgumentError bins(1:3, 5)
+        @test_throws ArgumentError sample!(cg; a = 1)                  # `op` missing
+
+        # A rejected sample changes nothing
+        strict = CoverGroup("strict", :a => [1], :b => ["big" => x -> x > 0])
+        @test_throws ArgumentError sample!(strict; a = 1)
+        @test_throws MethodError sample!(strict; a = 1, b = "text")   # predicate throws
+        @test coverage(strict) == 0 && strict.samples == 0
+        @test_throws ArgumentError CoverGroup("bad", :x => [])
+        @test_throws ArgumentError CoverGroup("bad", :x => [1, 1])
+        @test_throws ArgumentError CoverGroup("bad", :x => [1]; cross = [(:x, :y)])
+        @test_throws ArgumentError coverage(cg, :nope)
+
+        withenv("VERIJUL_SEED" => "0x2a") do
+            @test (@test_logs (:info, r"from VERIJUL_SEED") test_seed()) == 0x2a
+        end
+        withenv("VERIJUL_SEED" => nothing) do
+            @test (@test_logs (:info, r"rerun with VERIJUL_SEED=0x") test_seed()) isa UInt64
+        end
+    end
+
+    @testset "Scoreboard" begin
+        sb = Scoreboard("demo")
+        expect!(sb, 1, 2, 3)
+        @test observe!(sb, 1) && !observe!(sb, 5) && observe!(sb, 3)
+        @test !passed(sb) && sb.matched == 2
+        observe!(sb, 9)                                            # nothing expected any more
+        report = sprint(show, MIME"text/plain"(), sb)
+        @test occursin("demo: 2 matched, 2 mismatched, 0 still expected", report)
+        @test occursin("#2: expected 2, got 5", report)
+        @test occursin("#4: got 9 but nothing was expected", report)
+
+        sb2 = expect!(Scoreboard(; compare = (e, g) -> abs(e - g) <= 1), 10, 20, 30)
+        observe!(sb2, 11); observe!(sb2, 19)
+        @test !passed(sb2)                                         # 30 never seen
+        @test occursin("never seen: 30", sprint(show, MIME"text/plain"(), sb2))
+        observe!(sb2, 30)
+        @test passed(sb2)
+    end
+
+    @testset "Stream components (mock design)" begin
+        # `rst` serves as a valid signal without ready, `step` and `count` as data
+        dut = MockDesign.make_dut()
+        sim = Simulator(dut)
+        start_clock!(sim)
+        bus = StreamBus(data=:step, valid=:rst)
+        @test_throws ArgumentError send!(sim, bus, [1]; idle=1.0)
+        @test_throws ArgumentError send!(sim, bus, [1]; idle=-0.1)
+        @test_throws ArgumentError receive!(sim, bus, 1; ready=0)
+        @test_throws ArgumentError receive!(sim, bus, 1; ready=1.5)
+        within(10) do
+            send!(sim, bus, [3, 4, 5])                   # no ready: one word per cycle
+            @test dut.rst == 0 && dut.step == 5
+        end
+
+        # A monitor whose callback fails reports it from stop!, even if it
+        # finished before stop! was called
+        mon = StreamMonitor(sim, StreamBus(data=:count, valid=:rst); on_item = x -> error("bad item"))
+        dut.rst = 1
+        within(10) do
+            @tick sim 3
+        end
+        @test istaskdone(mon.task)
+        err = try stop!(mon); nothing catch e; e end
+        @test err isa TaskFailedException
+        @test err.task.exception isa TestbenchError && err.task.exception.error.msg == "bad item"
+        dut.rst = 0
+        stop_clock!(sim)
+    end
+
+    @testset "Internal signals need internals=true (mock design)" begin
+        dut = MockDesign.make_dut()
+        err = try signal(dut, "count"); nothing catch e; e end
+        @test err isa ErrorException && occursin("internals=true", err.msg)
+        @test_throws ErrorException dut["count"]
+        @test_throws ErrorException signals(dut)
+        cpp, _ = generate_bindings([HardwarePort("clk", :in, 1)], "top"; internals=true,
+                                   constants=["TOP.top.P"])
+        @test occursin("top_signal_read", cpp) && occursin("verilated_vpi.h", cpp)
+        @test occursin("\"TOP.top.P\",", cpp)
+
+        # Constants are found in the generated headers, whatever VPI says about them
+        dir = mktempdir()
+        write(joinpath(dir, "Vtop___024root.h"), """
+            class Vtop___024root {
+                static const ::IData/*31:0*/ top__DOT__DEPTH;
+                static constexpr CData/*7:0*/ top__DOT__u_sub__DOT__MODE = 3U;
+                CData/*0:0*/ top__DOT__count;
+                static const int notASignal;
+            };
+            """)
+        write(joinpath(dir, "Other.h"), "static const IData top__DOT__IGNORED;")
+        @test VeriJul.Builder.extract_constants(dir, "top") == ["TOP.top.DEPTH", "TOP.top.u_sub.MODE"]
+        cpp, _ = generate_bindings([HardwarePort("clk", :in, 1)], "top")
+        @test !occursin("vpi", cpp)
     end
 
     @testset "Aqua quality checks" begin

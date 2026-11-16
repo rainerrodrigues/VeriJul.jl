@@ -60,5 +60,7 @@ jobs:
       - name: Lint Verilog sources
         run: |
           verilator --lint-only -Wno-WIDTHEXPAND examples/filter.v
+          verilator --lint-only -Wall examples/gcd.v
+          verilator --lint-only -Wall examples/fifo.v
           verilator --lint-only -Iexamples/counter/include \
             examples/counter/counter.v examples/counter/inverter.v --top-module counter

@@ -65,9 +65,14 @@ Pkg.add("VeriJul")
    designs whose latency varies, with cycle limits.
 4. [Testing with Test.jl](@ref) runs `@test` inside concurrent testbenches,
    with failures that report the simulation time.
-5. [Build options and multiple clocks](@ref) covers multi-file designs,
+5. [Streams and scoreboards](@ref) drives and checks valid/ready interfaces
+   with random gaps and backpressure.
+6. [Internal signals](@ref) reads and writes signals inside the design.
+7. [Random stimulus and coverage](@ref) makes random tests reproducible and
+   measures which cases they hit.
+8. [Build options and multiple clocks](@ref) covers multi-file designs,
    parameters, defines and clock domains.
-6. [Ports and wide signals](@ref) explains port types, truncation and ports
+9. [Ports and wide signals](@ref) explains port types, truncation and ports
    wider than 64 bits.
 
 To keep building and loading as separate steps, see [Lower-level API](@ref).

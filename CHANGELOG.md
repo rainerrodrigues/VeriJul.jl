@@ -21,9 +21,22 @@
   `err.task.exception.error`.
 - `launch_<name>(sim, args...; kwargs...)` passes extra arguments on to the
   testbench function.
-- New `examples/gcd.v` and two tutorials: "Waiting for events" and
-  "Testing with Test.jl".
-- `Test` is now a dependency (it is a standard library).
+- Verification components for valid/ready (AXI-Stream style) interfaces:
+  `StreamBus`, `send!` (with random idle cycles), `receive!` (with random
+  backpressure) and `StreamMonitor`, plus a `Scoreboard` (`expect!`,
+  `observe!`, `passed`) that reports mismatches with their simulation time.
+- Internal signals: `load_dut(...; internals=true)` builds with Verilator's
+  VPI, and `signals(dut)`, `signal(dut, "u_core.state")` (read with `sig[]`,
+  write with `sig[] = v`) and `dut["name"]` access any signal in the
+  hierarchy.
+- Functional coverage: `CoverGroup` with bins given as ranges, collections,
+  predicates or values, crosses, `sample!`, `coverage`, `uncovered`,
+  `bins`, and a coverage report. `test_seed()` logs a random seed (or takes
+  it from `VERIJUL_SEED`) so random tests can be reproduced.
+- New `examples/gcd.v` and `examples/fifo.v`, and five tutorials: "Waiting
+  for events", "Testing with Test.jl", "Streams and scoreboards",
+  "Internal signals" and "Random stimulus and coverage".
+- `Test` and `Random` are now dependencies (both are standard libraries).
 
 ## v0.1.0
 

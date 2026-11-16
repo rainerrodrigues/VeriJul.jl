@@ -81,9 +81,12 @@ end
 function SimTestSet(desc::AbstractString; kwargs...)
     current = Test.get_testset()
     current isa SimTestSet || return Test.DefaultTestSet(desc; kwargs...)
-    inner = typeof(current.parent)(desc; kwargs...)
+    inner = typeof(unwrap(current))(desc; kwargs...)
     return SimTestSet(inner, current.sim, current.testbench)
 end
+
+# The real testset under any SimTestSet wrappers
+unwrap(ts) = ts isa SimTestSet ? unwrap(ts.parent) : ts
 
 # Finishing a nested set finishes the wrapped one, which records itself into
 # the enclosing testset as usual. (The testbench's own wrapper is never finished.)
@@ -100,10 +103,11 @@ function with_sim_testset(f, parent_stack, sim, name::Symbol)
         # Julia 1.13+: the testset is a ScopedValue the task already inherited
         current = Test.get_testset()
         current isa Test.FallbackTestSet && return f()
-        return Base.ScopedValues.with(f, Test.CURRENT_TESTSET => SimTestSet(current, sim, name))
+        # A child testbench wraps the real testset, not its parent's wrapper
+        return Base.ScopedValues.with(f, Test.CURRENT_TESTSET => SimTestSet(unwrap(current), sim, name))
     end
     (parent_stack === nothing || isempty(parent_stack)) && return f()
     task_local_storage(:__BASETESTNEXT__, copy(parent_stack))
-    Test.push_testset(SimTestSet(last(parent_stack), sim, name))
+    Test.push_testset(SimTestSet(unwrap(last(parent_stack)), sim, name))
     return f()
 end
