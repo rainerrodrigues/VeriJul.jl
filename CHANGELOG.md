@@ -36,7 +36,38 @@
 - New `examples/gcd.v` and `examples/fifo.v`, and five tutorials: "Waiting
   for events", "Testing with Test.jl", "Streams and scoreboards",
   "Internal signals" and "Random stimulus and coverage".
-- `Test` and `Random` are now dependencies (both are standard libraries).
+- `run!(sim, n) do cycle ... end` runs cycles directly in the calling task,
+  without the clock task: about 20× faster than ticking, for simple
+  stimulus loops.
+- A testbench that throws now stops the clock (unless the simulator was
+  created with `stop_on_error=false`): every task waiting on it, including
+  the main task, gets the same `TestbenchError`, and later waits report it
+  too, so nothing hangs and the failure always reaches the caller.
+- Waveforms: `trace=:fst` builds write FST files, much smaller than VCD.
+  `WaveRecorder` keeps the last N cycles of chosen ports and internal
+  signals in memory and writes a VCD file when a check inside a testbench
+  fails or a testbench throws; `save_waves` writes it on demand.
+- Faster scheduling: the lockstep checks no longer allocate, and every wait
+  notifies the clock, including `wait(sim.rising_edge)` (now an
+  `EdgeEvent`, which also reports a stopped clock instead of hanging). The
+  clock only falls back to checking periodically while a testbench is busy.
+  20–30% more cycles per second with tasks; `benchmark/scheduler.jl` runs
+  in CI.
+- Port reads are type-stable: `DUT` keeps its ports in a `NamedTuple` of
+  typed handles, so `f(dut) = dut.count` infers `UInt8`.
+- PrecompileTools: the first simulation in a session starts about 5× faster.
+- **Breaking:** the generated `AutoBindings` Julia module is gone, and
+  `build_dut` returns just the library path. Load it with the new
+  `DUT(lib_path, top)`. `generate_bindings` returns only the C++ code.
+- Removed fallbacks for libraries built by pre-0.1 development versions.
+- Examples: `uart_tx.v` (with a UART receiver written in Julia) and
+  `stream_filter.v` (AXI-Stream with backpressure), demo scripts, and an
+  Examples page in the docs. New "Waveforms" tutorial and "Performance"
+  guide; the lower-level guide is rewritten.
+- The SimCore lockstep scheduler lives in its own file, with its own tests,
+  and the wide-value conversions have property-based tests.
+- Windows is documented as unsupported (use WSL2).
+- `Test`, `Random` and `PrecompileTools` are now dependencies.
 
 ## v0.1.0
 

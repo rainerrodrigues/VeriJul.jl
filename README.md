@@ -16,7 +16,7 @@ VCD waveform output.
 - Verilator 4.200 or newer on `PATH` (or set `VERIJUL_VERILATOR` to its path)
 - A C++17 compiler (`g++` or `clang++`; set `CXX` to choose)
 
-Tested on Linux and macOS. Windows is not supported yet.
+Tested on Linux and macOS. Windows is not supported (use WSL2).
 
 ```bash
 sudo apt-get install verilator g++   # Ubuntu / Debian
@@ -64,6 +64,8 @@ Also included:
 - internal signals by name with `load_dut(...; internals=true)`: `dut["u_core.state"]`
 - functional coverage (`CoverGroup`, `sample!`, `coverage`) and reproducible
   random seeds (`test_seed`)
+- `run!(sim, n) do cycle ... end`, a task-free loop about 20× faster than ticking
+- VCD or FST waveforms, and a `WaveRecorder` that saves just the cycles before a failure
 - `reset!`, and timeouts so stuck testbenches fail instead of hanging
 - ports of any width, with wide ports as `BigInt`
 
@@ -72,7 +74,7 @@ your working directory unless you pass `build_dir`.
 
 The [documentation](https://rainerrodrigues.github.io/VeriJul.jl/dev/) has
 tutorials for each of these and the API reference. Runnable scripts are in
-[`examples/`](examples/).
+[`examples/`](examples/), including a UART transmitter and an AXI-Stream filter.
 
 ## Running the tests
 

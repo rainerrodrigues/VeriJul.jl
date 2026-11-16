@@ -57,18 +57,27 @@ sim_context(ts::SimTestSet) =
 
 Test.record(ts::SimTestSet, res) = Test.record(ts.parent, res)
 
+# Tell the simulator's hooks (e.g. a WaveRecorder) that a check failed
+function notify_hooks(sim, res)
+    for h in sim.hooks
+        on_failure(h, sim, res)
+    end
+end
+
 function Test.record(ts::SimTestSet, res::Test.Fail)
     ctx = sim_context(ts)
     old = res.context
     new_ctx = old === nothing ? ctx : string(old, "\n", ctx)
     # Rebuild the Fail with the extra context; its fields are in constructor order
     args = [name === :context ? new_ctx : getfield(res, name) for name in fieldnames(Test.Fail)]
+    notify_hooks(ts.sim, res)
     return Test.record(ts.parent, Test.Fail(args...))
 end
 
 function Test.record(ts::SimTestSet, res::Test.Error)
     # Error's constructor differs between Julia versions, so rather than
     # rebuilding it, print the context right after Test prints the error.
+    notify_hooks(ts.sim, res)
     r = Test.record(ts.parent, res)
     printstyled("  Simulation context: ", sim_context(ts), "\n"; color=:red)
     return r

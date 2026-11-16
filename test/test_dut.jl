@@ -12,12 +12,12 @@ build_root = mktempdir()
     mtime1 = mtime(lib)
 
     # Unchanged design: no rebuild
-    lib2, _ = build_dut(counter_srcs, "counter"; build_dir=dir, include_dirs=counter_inc)
+    lib2 = build_dut(counter_srcs, "counter"; build_dir=dir, include_dirs=counter_inc)
     @test lib2 == lib && mtime(lib2) == mtime1
 
     # force=true rebuilds into a new library file, so a design that is still
     # loaded can't make dlopen hand back the old code
-    lib3, _ = build_dut(counter_srcs, "counter"; build_dir=dir, include_dirs=counter_inc, force=true)
+    lib3 = build_dut(counter_srcs, "counter"; build_dir=dir, include_dirs=counter_inc, force=true)
     @test lib3 != lib && isfile(lib3) && !isfile(lib)
     fresh = load_dut(counter_srcs, "counter"; build_dir=dir, include_dirs=counter_inc)
     @test getfield(fresh, :lib_path) == lib3          # cache now points at the new build
@@ -149,7 +149,7 @@ end
     dir = joinpath(mktempdir(), "shared")
     script = """
     using VeriJul
-    lib, _ = build_dut($(repr(counter_srcs)), "counter"; build_dir=$(repr(dir)),
+    lib = build_dut($(repr(counter_srcs)), "counter"; build_dir=$(repr(dir)),
                        include_dirs=$(repr(counter_inc)))
     dut = VeriJul.Device.DUT(lib, "counter",
                              VeriJul.Builder.extract_ports(joinpath(dirname(lib), "Vcounter.h")))
@@ -313,6 +313,100 @@ end
     err = try signal(dut, "mem"); nothing catch e; e end
     @test err isa ErrorException && occursin("array or memory", err.msg)
 
+    stop_clock!(sim)
+    destroy!(dut)
+end
+
+@testset "FST waveforms" begin
+    if get(ENV, "VERIJUL_TEST_FST", "") == "1"
+        dut = load_dut(joinpath(examples, "filter.v"), "filter"; trace=:fst,
+                       build_dir=joinpath(build_root, "filter_fst"))
+        fst = joinpath(build_root, "wave.fst")
+        @test_throws ErrorException enable_trace!(dut, joinpath(build_root, "wave.vcd"))
+        enable_trace!(dut, fst)
+        sim = Simulator(dut)
+        start_clock!(sim)
+        dut.in_data = 0xFF
+        @tick sim 20
+        stop_clock!(sim)
+        destroy!(dut)
+        @test isfile(fst) && filesize(fst) > 0
+        @test read(fst)[1] == 0x00          # FST files start with a header block (type 0)
+    else
+        @info "Skipping the FST test; set VERIJUL_TEST_FST=1 where zlib (and lz4) headers are installed"
+    end
+end
+
+@testset "WaveRecorder with internal signals (fifo.v)" begin
+    dut = load_dut(joinpath(examples, "fifo.v"), "fifo"; internals=true,
+                   build_dir=joinpath(build_root, "fifo"))
+    sim = Simulator(dut)
+    rec = WaveRecorder(sim; cycles=8, signals=[:s_valid, :s_ready, "count", "wr_ptr"])
+    start_clock!(sim)
+    reset!(sim)
+    send!(sim, StreamBus(data=:s_data, valid=:s_valid, ready=:s_ready), [1, 2, 3])
+    stop_clock!(sim)
+    vcd = read(save_waves(rec, joinpath(build_root, "fifo_window.vcd")), String)
+    @test occursin("\$var wire 3 # count [2:0] \$end", vcd)
+    @test occursin("b11 #", vcd)                 # count reached 3
+    destroy!(dut)
+end
+
+# A UART receiver in Julia: decode one 8N1 byte from `tx`, sampling mid-bit
+function uart_receive(sim, clks_per_bit)
+    wait_edge(sim, :tx; edge=:falling, max_cycles=100 * clks_per_bit)   # start bit
+    tick(sim, clks_per_bit ÷ 2)                                         # middle of the start bit
+    @test sim.dut.tx == 0
+    byte = 0x00
+    for i in 0:7
+        tick(sim, clks_per_bit)
+        byte |= UInt8(sim.dut.tx) << i
+    end
+    tick(sim, clks_per_bit)
+    @test sim.dut.tx == 1                                               # stop bit
+    return byte
+end
+
+@testset "Examples: UART transmitter (uart_tx.v)" begin
+    dut = load_dut(joinpath(examples, "uart_tx.v"), "uart_tx"; parameters=Dict("CLKS_PER_BIT" => 4),
+                   build_dir=joinpath(build_root, "uart"))
+    sim = Simulator(dut)
+    start_clock!(sim)
+    reset!(sim)
+    @test dut.tx == 1 && dut.ready == 1
+    bytes = UInt8.(0:255)
+    @testbench tx(sim, bytes) = send!(sim, StreamBus(data=:data, valid=:valid, ready=:ready), bytes)
+    @testbench rx(sim, n) = [uart_receive(sim, 4) for _ in 1:n]
+    r = launch_rx(sim, length(bytes))                 # listen before anything is sent
+    t = launch_tx(sim, bytes)
+    wait(t)
+    @test fetch(r) == bytes
+    stop_clock!(sim)
+    destroy!(dut)
+end
+
+@testset "Examples: AXI-Stream filter (stream_filter.v)" begin
+    dut = load_dut(joinpath(examples, "stream_filter.v"), "stream_filter";
+                   build_dir=joinpath(build_root, "stream_filter"))
+    sim = Simulator(dut)
+    start_clock!(sim)
+    reset!(sim)
+    s_axis = StreamBus(data=:s_axis_tdata, valid=:s_axis_tvalid, ready=:s_axis_tready)
+    m_axis = StreamBus(data=:m_axis_tdata, valid=:m_axis_tvalid, ready=:m_axis_tready)
+    rng = Random.Xoshiro(3)
+    data = rand(rng, UInt8, 300)
+    padded = [zeros(UInt8, 3); data]
+    expected = [UInt8(sum(Int, padded[i:i+3]) ÷ 4) for i in 1:length(data)]
+    sb = expect!(Scoreboard("filter"; sim), expected...)
+    mon = StreamMonitor(sim, m_axis; on_item = x -> observe!(sb, x))
+    @testbench tx(sim, d, rng) = send!(sim, s_axis, d; idle=0.2, rng)
+    @testbench rx(sim, n, rng) = receive!(sim, m_axis, n; ready=0.5, rng)
+    t = launch_tx(sim, data, rng)
+    r = launch_rx(sim, length(data), rng)
+    wait(t)
+    @test fetch(r) == expected
+    stop!(mon)
+    @test passed(sb)
     stop_clock!(sim)
     destroy!(dut)
 end

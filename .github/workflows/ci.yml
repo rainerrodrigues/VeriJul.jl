@@ -16,9 +16,13 @@ jobs:
   test:
     name: Julia ${{ matrix.julia-version }} - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    env:
+      # FST waveforms need zlib and lz4 headers, installed on Linux below
+      VERIJUL_TEST_FST: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
     strategy:
       fail-fast: false
       matrix:
+        # 1.10 is the oldest Julia VeriJul supports (Project.toml [compat])
         julia-version: ['1.10', '1.11', '1']
         os: [ubuntu-latest]
         include:
@@ -29,7 +33,7 @@ jobs:
 
       - name: Install Verilator (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y verilator g++
+        run: sudo apt-get update && sudo apt-get install -y verilator g++ zlib1g-dev liblz4-dev
 
       - name: Install Verilator (macOS)
         if: runner.os == 'macOS'
@@ -51,6 +55,22 @@ jobs:
           # Fail loudly on main (where the secret is available); forks can't see it
           fail_ci_if_error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
+  benchmark:
+    # Scheduler throughput, with a design written in Julia (no Verilator).
+    # Reported in the job summary; it doesn't fail the build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v2
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Run the scheduler benchmark
+        run: |
+          julia --project benchmark/scheduler.jl | tee bench.txt
+          { echo '### Scheduler benchmark'; echo '```'; cat bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
   verilog-lint:
     runs-on: ubuntu-latest
     steps:
@@ -62,5 +82,7 @@ jobs:
           verilator --lint-only -Wno-WIDTHEXPAND examples/filter.v
           verilator --lint-only -Wall examples/gcd.v
           verilator --lint-only -Wall examples/fifo.v
+          verilator --lint-only -Wall examples/uart_tx.v
+          verilator --lint-only -Wall examples/stream_filter.v
           verilator --lint-only -Iexamples/counter/include \
             examples/counter/counter.v examples/counter/inverter.v --top-module counter

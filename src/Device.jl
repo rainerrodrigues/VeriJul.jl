@@ -2,16 +2,19 @@ module Device
 
 using Libdl
 using ..Interop
-using ..Interop: VerilatedModel, read_port, write_port, check_alive, nwords, words_to_int, int_to_words
+using ..Interop: VerilatedModel, read_port, write_port, port_type, check_alive, nwords,
+                 words_to_int, int_to_words
 using ..Builder: Builder, HardwarePort, build_dut, extract_ports
 
 export DUT, load_dut, ports, Signal, signal, signals
 
-struct PortHandle
+# `T` is the Julia type of the port's value, so reads are type-stable.
+struct PortHandle{T}
     port::HardwarePort
     get_ptr::Ptr{Cvoid}
     set_ptr::Ptr{Cvoid}   # C_NULL for outputs
 end
+PortHandle(port::HardwarePort, get_ptr, set_ptr) = PortHandle{port_type(port.width)}(port, get_ptr, set_ptr)
 
 """
     DUT
@@ -26,29 +29,47 @@ dut.out_data            # read an output (or an input)
 Ports up to 64 bits read back as `UInt8`/`UInt16`/`UInt32`/`UInt64`; wider
 ports read back as `BigInt` and accept any `Integer`.
 
-Create one with [`load_dut`](@ref VeriJul.Device.load_dut). List its ports
-with [`ports`](@ref VeriJul.Device.ports).
+Create one with [`load_dut`](@ref VeriJul.Device.load_dut), or with
+`DUT(lib_path, top_module)` for a library built with
+[`build_dut`](@ref VeriJul.Builder.build_dut). List its ports with
+[`ports`](@ref VeriJul.Device.ports).
+
+Port reads are type-stable: in `f(dut) = dut.count`, the compiler knows the
+result type from the port's width.
 """
-struct DUT
+struct DUT{H<:NamedTuple}
     model::VerilatedModel
     top::String
     lib_path::String
-    handles::Dict{Symbol,PortHandle}
+    handles::H              # port name => PortHandle, in declaration order
     order::Vector{Symbol}
+end
+
+function DUT(model::VerilatedModel, top::AbstractString, lib_path::AbstractString,
+             handles::AbstractDict, order::Vector{Symbol})
+    nt = NamedTuple{Tuple(order)}(Tuple(handles[n] for n in order))
+    return DUT(model, String(top), String(lib_path), nt, order)
 end
 
 function DUT(lib_path::AbstractString, top::AbstractString, port_list::Vector{HardwarePort})
     model = VerilatedModel(lib_path)
     handles = Dict{Symbol,PortHandle}()
     for p in port_list
-        get_ptr = Libdl.dlsym(model.lib_handle, Symbol("get_", p.name); throw_error=false)
-        get_ptr === nothing && error("Library $lib_path has no getter for port `$(p.name)`. ",
-                                     "It was probably built by an older VeriJul; rebuild with force=true.")
+        get_ptr = Libdl.dlsym(model.lib_handle, Symbol("get_", p.name))
         set_ptr = p.direction == :in ? Libdl.dlsym(model.lib_handle, Symbol("set_", p.name)) : C_NULL
         handles[Symbol(p.name)] = PortHandle(p, get_ptr, set_ptr)
     end
-    return DUT(model, String(top), String(lib_path), handles, [Symbol(p.name) for p in port_list])
+    return DUT(model, top, lib_path, handles, [Symbol(p.name) for p in port_list])
 end
+
+"""
+    DUT(lib_path, top_module) -> DUT
+
+Loads a library built with [`build_dut`](@ref VeriJul.Builder.build_dut).
+`load_dut` does the build and this in one step.
+"""
+DUT(lib_path::AbstractString, top::AbstractString) =
+    DUT(lib_path, top, extract_ports(joinpath(dirname(lib_path), "V$(top).h")))
 
 """
     load_dut(sources, top_module; kwargs...) -> DUT
@@ -56,7 +77,7 @@ end
 Builds the design (or reuses a cached build) and loads it. Takes the same
 keywords as [`build_dut`](@ref VeriJul.Builder.build_dut): `build_dir`,
 `include_dirs`, `defines`, `parameters`, `verilator_args`, `internals`,
-`force`, `verbose`. With `internals=true`, internal signals can be read and
+`trace`, `force`, `verbose`. With `internals=true`, internal signals can be read and
 written too (see [`signal`](@ref VeriJul.Device.signal)).
 
 ```julia
@@ -69,20 +90,24 @@ and set of options, so nothing is written to the current directory.
 """
 function load_dut(sources, top_module::AbstractString;
                   build_dir::Union{AbstractString,Nothing}=nothing, kwargs...)
-    lib, _ = build_dut(sources, top_module; build_dir=build_dir, kwargs...)
-    header = joinpath(dirname(lib), "V$(top_module).h")
-    return DUT(lib, top_module, extract_ports(header))
+    return DUT(build_dut(sources, top_module; build_dir=build_dir, kwargs...), top_module)
 end
 
-handle(d::DUT, name::Symbol) =
-    get(getfield(d, :handles), name) do
-        error("Design `$(getfield(d, :top))` has no port named `$name`. Ports: ",
-              join(getfield(d, :order), ", "))
-    end
+@inline function handle(d::DUT, name::Symbol)
+    hs = getfield(d, :handles)
+    haskey(hs, name) || no_port(d, name)
+    return getfield(hs, name)
+end
 
-function Base.getproperty(d::DUT, name::Symbol)
-    h = handle(d, name)
-    return read_port(h.get_ptr, getfield(d, :model), h.port.width)
+@noinline no_port(d::DUT, name::Symbol) =
+    error("Design `$(getfield(d, :top))` has no port named `$name`. Ports: ",
+          join(getfield(d, :order), ", "))
+
+read_handle(h::PortHandle{T}, model::VerilatedModel) where {T} =
+    read_port(T, h.get_ptr, model, h.port.width)
+
+@inline function Base.getproperty(d::DUT, name::Symbol)
+    return read_handle(handle(d, name), getfield(d, :model))
 end
 
 function Base.setproperty!(d::DUT, name::Symbol, val::Integer)
@@ -102,7 +127,7 @@ Base.propertynames(d::DUT, private::Bool=false) = Tuple(getfield(d, :order))
 
 The design's top-level ports, in declaration order.
 """
-ports(d::DUT) = [getfield(d, :handles)[n].port for n in getfield(d, :order)]
+ports(d::DUT) = [h.port for h in values(getfield(d, :handles))]
 
 # ---------------------------------------------------------------------------
 # Internal signals (designs built with internals=true)

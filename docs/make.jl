@@ -18,10 +18,15 @@ makedocs(
             "tutorials/streams.md",
             "tutorials/internals.md",
             "tutorials/coverage.md",
+            "tutorials/waveforms.md",
             "tutorials/build_and_clocks.md",
             "tutorials/ports.md",
         ],
-        "Lower-level API" => "guides/low_level.md",
+        "Examples" => "examples.md",
+        "Guides" => [
+            "guides/performance.md",
+            "guides/low_level.md",
+        ],
         "API" => "api.md",
     ],
 )

@@ -25,6 +25,7 @@ stop_clock!
 tick
 @tick
 reset!
+run!
 ```
 
 ## Waiting and testing
@@ -63,6 +64,14 @@ signals
 Signal
 ```
 
+## Waveform recording
+
+```@docs
+WaveRecorder
+save_waves
+stop_recording!
+```
+
 ## Coverage and random stimulus
 
 ```@docs
@@ -91,4 +100,5 @@ VeriJul.Builder.generate_bindings
 ```@docs
 VerilatedModel
 eval_step!
+VeriJul.SimCore.EdgeEvent
 ```
