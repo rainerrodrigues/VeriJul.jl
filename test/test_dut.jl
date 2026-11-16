@@ -187,3 +187,57 @@ end
     @test all(==(10), diff(times))
     @test outs == [0, 63, 127, 191, 255, 255]
 end
+
+@testset "Waiting for events and @test in testbenches (gcd.v)" begin
+    dut = load_dut(joinpath(examples, "gcd.v"), "gcd"; build_dir=joinpath(build_root, "gcd"))
+    sim = Simulator(dut)
+    start_clock!(sim)
+    reset!(sim)
+
+    function start!(sim, a, b)
+        sim.dut.a = a; sim.dut.b = b; sim.dut.start = 1
+        @tick sim
+        sim.dut.start = 0
+    end
+
+    # Latency depends on the inputs; @wait_until returns the edges waited
+    start!(sim, 48, 18)
+    n1 = @wait_until sim dut.done == 1 max_cycles=100
+    @test dut.result == 6
+    start!(sim, 1000, 3)
+    n2 = @wait_until sim dut.done == 1 max_cycles=1000
+    @test dut.result == 1 && n2 > n1
+
+    start!(sim, 12, 8)
+    @test wait_edge(sim, :busy; edge=:falling, max_cycles=100) == 0
+    @test dut.done == 1 && dut.result == 4
+
+    @tick sim
+    @test_throws WaitTimeout wait_edge(sim, :done; max_cycles=20)    # nothing started
+
+    # Driver and checker testbenches; the checks land in this testset
+    @testbench function driver(sim, jobs, pairs)
+        for (a, b) in pairs
+            put!(jobs, (a, b))
+            start!(sim, a, b)
+            @wait_until sim sim.dut.done == 1 max_cycles=5000
+        end
+        close(jobs)
+    end
+    @testbench function checker(sim, jobs, results)
+        for (a, b) in jobs
+            wait_edge(sim, :done; max_cycles=5000)
+            push!(results, Int(sim.dut.result) == gcd(a, b))
+            @test sim.dut.result == gcd(a, b)
+        end
+    end
+    pairs = [(a, b) for a in (7, 64, 255) for b in (1, 12, 81)]
+    jobs, results = Channel{Tuple{Int,Int}}(Inf), Bool[]
+    d = launch_driver(sim, jobs, pairs)
+    c = launch_checker(sim, jobs, results)
+    wait(d); wait(c)
+    @test length(results) == length(pairs) && all(results)
+
+    stop_clock!(sim)
+    destroy!(dut)
+end
