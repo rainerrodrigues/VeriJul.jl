@@ -89,11 +89,11 @@ macro testbench(expr)
         sig = sig.args[1]
     end
     func_name = sig.args[1]
-    
+
     return quote
         # Defines the user's function
         $(esc(expr))
-        
+
         # Creates a launcher for it
         function $(esc(Symbol("launch_", func_name)))(sim::Simulator, args...; kwargs...)
             launch($(esc(func_name)), sim, args...; kwargs...)

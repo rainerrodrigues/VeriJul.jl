@@ -10,7 +10,7 @@ module filter (
     assign sum = shift_reg[0] + shift_reg[1] + shift_reg[2] + shift_reg[3];
 
     initial begin
-        shift_reg[0] = 0; shift_reg[1] = 0; 
+        shift_reg[0] = 0; shift_reg[1] = 0;
         shift_reg[2] = 0; shift_reg[3] = 0;
         out_data = 0;
     end
@@ -21,7 +21,7 @@ module filter (
         shift_reg[2] <= shift_reg[1];
         shift_reg[1] <= shift_reg[0];
         shift_reg[0] <= in_data;
-        
+
         // Output the average (divide by 4 via bitshift)
         out_data <= sum[9:2];
     end

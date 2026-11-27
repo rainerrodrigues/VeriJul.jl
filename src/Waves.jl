@@ -82,11 +82,12 @@ function SimCore.on_evaluate(rec::WaveRecorder, sim::Simulator)
 end
 
 function SimCore.on_failure(rec::WaveRecorder, sim::Simulator, err)
-    rec.dir === nothing && return nothing
+    dir = rec.dir                    # a local, so the `nothing` check narrows its type
+    dir === nothing && return nothing
     length(rec.saved) >= rec.max_files && return nothing
     isempty(rec.times) && return nothing
-    mkpath(rec.dir)
-    path = joinpath(rec.dir, "failure_$(length(rec.saved) + 1).vcd")
+    mkpath(dir)
+    path = joinpath(dir, "failure_$(length(rec.saved) + 1).vcd")
     save_waves(rec, path)
     push!(rec.saved, path)
     @info "Saved the last $(rec.cycles) cycles before the failure (time $(sim.time)) to $path"

@@ -29,7 +29,7 @@ jobs:
           - julia-version: '1'
             os: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Verilator (Linux)
         if: runner.os == 'Linux'
@@ -39,16 +39,16 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install verilator
 
-      - uses: julia-actions/setup-julia@v2
+      - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.julia-version }}
 
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
 
       - uses: julia-actions/julia-processcoverage@v1
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -60,21 +60,57 @@ jobs:
     # Reported in the job summary; it doesn't fail the build.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: julia-actions/setup-julia@v2
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
         with:
           version: '1'
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
       - name: Run the scheduler benchmark
         run: |
           julia --project benchmark/scheduler.jl | tee bench.txt
           { echo '### Scheduler benchmark'; echo '```'; cat bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
+  lint:
+    # The same generic checks as .pre-commit-config.yaml (whitespace, line
+    # endings, YAML/TOML syntax, merge markers, large files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+      - name: pre-commit
+        run: |
+          pip install pre-commit
+          pre-commit run --all-files --show-diff-on-failure
+
+  jet:
+    # Static analysis: fails when JET finds possible errors (undefined names,
+    # calls that can't dispatch, nothing-related mistakes). Pinned to 1.12
+    # because JET tracks Julia's compiler internals and lags new releases.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v3
+      - name: Run JET
+        run: |
+          julia -e '
+            using Pkg
+            Pkg.activate(temp = true)
+            Pkg.develop(path = pwd()); Pkg.add("JET")
+            using JET, VeriJul
+            r = JET.report_package(VeriJul; target_modules = (VeriJul,), toplevel_logger = nothing)
+            show(stdout, MIME"text/plain"(), r)
+            isempty(JET.get_reports(r)) || exit(1)'
+
   verilog-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Verilator
         run: sudo apt-get update && sudo apt-get install -y verilator
       - name: Lint Verilog sources

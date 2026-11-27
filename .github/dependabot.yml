@@ -1,0 +1,14 @@
+# Keep the GitHub Actions used by the workflows current: one grouped PR per
+# week at most. Julia dependencies are handled by CompatHelper
+# (CompatHelper.yml), which knows about [compat] bounds.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
