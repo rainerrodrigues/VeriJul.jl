@@ -1,0 +1,52 @@
+name: Dependabot auto-merge
+
+# Merges Dependabot's minor and patch updates once every check on the pull
+# request has passed. Major updates (which may change behaviour) stay open
+# for a person to review.
+#
+# Runs when CI or Documentation finishes, rather than on the pull request
+# itself, so the merge waits for the checks; the last workflow to finish does
+# the merge. A merge made with GITHUB_TOKEN does not start other workflows;
+# the docs site picks up a toolchain bump with the next push to main.
+on:
+  workflow_run:
+    workflows: [CI, Documentation]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge minor and patch updates whose checks all passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          pr=$(gh pr list --head "$HEAD_BRANCH" --state open --json number,author \
+                 --jq '.[] | select(.author.login == "app/dependabot") | .number')
+          if [ -z "$pr" ]; then echo "No open Dependabot pull request for $HEAD_BRANCH"; exit 0; fi
+          title=$(gh pr view "$pr" --json title --jq .title)
+          # Grouped PRs list several actions; only merge when none of them is a major bump
+          body=$(gh pr view "$pr" --json body --jq .body)
+          majors=0; found=0
+          while read -r from to; do
+            found=1
+            [ "$from" != "$to" ] && majors=1
+          done < <(printf '%s\n%s\n' "$title" "$body" | grep -oE 'from v?[0-9]+[^ ]* to v?[0-9]+' \
+                     | sed -E 's/from v?([0-9]+)[^ ]* to v?([0-9]+)/\1 \2/')
+          if [ "$found" = 0 ]; then echo "Could not read the versions of #$pr"; exit 0; fi
+          if [ "$majors" = 1 ]; then echo "#$pr contains a major update; leaving it for review"; exit 0; fi
+          # 0 only when every check passed; 8 while some are still running
+          if ! gh pr checks "$pr" > /dev/null; then
+            echo "Not every check on #$pr has passed yet"; exit 0
+          fi
+          gh pr merge "$pr" --merge

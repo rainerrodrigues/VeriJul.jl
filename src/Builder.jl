@@ -56,7 +56,8 @@ function verilator_version()
     out = read(`$(verilator_cmd()) --version`, String)
     m = match(r"Verilator\s+(\d+)\.(\d+)", out)
     m === nothing && error("Could not parse Verilator version from: $(repr(out))")
-    return VersionNumber(parse(Int, m[1]), parse(Int, m[2]))
+    # both groups are mandatory (\d+), so a match always captures them
+    return VersionNumber(parse(Int, m[1]::AbstractString), parse(Int, m[2]::AbstractString))
 end
 
 function check_verilator()
@@ -88,9 +89,10 @@ Reads the ports of a Verilated model from its generated `V<top>.h` header.
 function extract_ports(header_path::AbstractString)
     ports = HardwarePort[]
     for m in eachmatch(PORT_DECL, read(header_path, String))
+        # groups 1, 3, 4 and 5 of PORT_DECL are mandatory, so a match always captures them
         dir = m[1] == "OUT" ? :out : :in
-        width = abs(parse(Int, m[4]) - parse(Int, m[5])) + 1
-        push!(ports, HardwarePort(m[3], dir, width))
+        width = abs(parse(Int, m[4]::AbstractString) - parse(Int, m[5]::AbstractString)) + 1
+        push!(ports, HardwarePort(m[3]::AbstractString, dir, width))
     end
     isempty(ports) && error("No ports found in $header_path")
     return ports
@@ -439,7 +441,7 @@ function build_dut(sources::Union{AbstractString,AbstractVector{<:AbstractString
     trace === :fst && push!(args, "--trace-fst")
 
     key = build_key(srcs, top_module, incs, defines, parameters, args, vver, string(cxx))
-    build_dir = build_dir === nothing ? joinpath(build_cache(), "$(top_module)_$(key)") : abspath(build_dir)
+    build_dir = String(build_dir === nothing ? joinpath(build_cache(), "$(top_module)_$(key)") : abspath(build_dir))
 
     claim_build_dir(build_dir)
     # Hold a lock for the whole check-and-build, so another Julia process
@@ -458,7 +460,7 @@ function build_dut(sources::Union{AbstractString,AbstractVector{<:AbstractString
     end
 end
 
-function compile_design(build_dir, key, srcs, top_module, incs, defines, parameters, args,
+function compile_design(build_dir::AbstractString, key, srcs, top_module, incs, defines, parameters, args,
                         verilator, cxx, vver, verbose)
     # Every build gets a new library name: dlopen returns an already-loaded
     # library for a path it has seen, so reusing a path could run old code.
